@@ -66,10 +66,15 @@ func TestCreateModelRunResources(t *testing.T) {
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 
-	st, err := store.New(filepath.Join(t.TempDir(), "modelrun.json"))
+	st, err := store.New(filepath.Join(t.TempDir(), "modelrun.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	hub := realtime.NewHub()
 	executor := deploy.NewExecutor(st, hub)
 

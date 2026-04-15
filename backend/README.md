@@ -9,19 +9,20 @@ cd backend
 go run ./cmd/modelrun
 ```
 
-The service listens on `:8080` by default and writes JSON state to
-`backend/data/modelrun.json`.
+The service listens on `:8080` by default and writes SQLite state to
+`backend/data/modelrun.db`.
 
 ## Environment
 
 - `MODELRUN_ADDR`: listen address, for example `:8080`
-- `MODELRUN_DATA`: data file path
+- `MODELRUN_DATA`: SQLite data file path
 - `MODELRUN_STATIC_DIR`: optional directory for built frontend assets
 
 ## Main endpoints
 
 - `GET /api/health`
 - `GET|POST /api/projects`
+- `GET /api/projects/{id}/summary`
 - `GET|POST /api/servers`
 - `POST /api/servers/{id}/test`
 - `GET /api/servers/{id}/resources`

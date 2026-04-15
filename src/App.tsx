@@ -6,6 +6,7 @@ import { ServerManager } from './components/ServerManager';
 import { DeploymentList } from './components/DeploymentList';
 import { DeployWizard } from './components/DeployWizard';
 import { ModelManager } from './components/ModelManager';
+import { ProjectManager } from './components/ProjectManager';
 
 const App: React.FC = () => {
   return (
@@ -14,6 +15,7 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/projects" element={<ProjectManager />} />
           <Route path="/models" element={<ModelManager />} />
           <Route path="/servers" element={<ServerManager />} />
           <Route path="/wizard" element={<DeployWizard />} />

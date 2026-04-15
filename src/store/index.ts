@@ -82,12 +82,28 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           projects: state.projects.filter((p) => p.id !== id),
           servers: state.servers.filter((s) => s.projectId !== id),
+          deployments: state.deployments.filter((deployment) =>
+            !deployment.servers.some((serverId) =>
+              state.servers.some((server) => server.id === serverId && server.projectId === id)
+            )
+          ),
+          currentProjectId:
+            state.currentProjectId === id
+              ? state.projects.find((project) => project.id !== id)?.id || null
+              : state.currentProjectId,
         })),
       setCurrentProject: (id) =>
         set(() => ({ currentProjectId: id })),
 
       addServer: (server) =>
-        set((state) => ({ servers: [...state.servers, server] })),
+        set((state) => ({
+          servers: [...state.servers, server],
+          projects: state.projects.map((project) =>
+            project.id === server.projectId && !project.serverIds.includes(server.id)
+              ? { ...project, serverIds: [...project.serverIds, server.id], updatedAt: new Date().toISOString() }
+              : project
+          ),
+        })),
       updateServer: (id, server) =>
         set((state) => ({
           servers: state.servers.map((s) =>
@@ -97,6 +113,10 @@ export const useAppStore = create<AppState>()(
       removeServer: (id) =>
         set((state) => ({
           servers: state.servers.filter((s) => s.id !== id),
+          projects: state.projects.map((project) => ({
+            ...project,
+            serverIds: project.serverIds.filter((serverId) => serverId !== id),
+          })),
         })),
 
       addJumpHost: (host) =>

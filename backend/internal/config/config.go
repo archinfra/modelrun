@@ -11,7 +11,7 @@ type Config struct {
 func Load() Config {
 	cfg := Config{
 		Addr:     ":8080",
-		DataPath: "data/modelrun.json",
+		DataPath: "data/modelrun.db",
 	}
 
 	if v := os.Getenv("MODELRUN_ADDR"); v != "" {
