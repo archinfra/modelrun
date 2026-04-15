@@ -1,0 +1,14 @@
+.git/
+.github/
+
+node_modules/
+dist/
+
+backend/bin/
+backend/data/
+
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.tmp
