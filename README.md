@@ -6,7 +6,9 @@ deployment workflows.
 ## Container Image
 
 GitHub Actions builds and publishes the all-in-one image to GitHub Container
-Registry on every push to `main`.
+Registry on every push to `main`, and also on pushed git tags. When Aliyun
+registry credentials are configured at the org or repo level, the same image
+tags are pushed to Aliyun Container Registry in the same workflow run.
 
 ```bash
 docker pull ghcr.io/archinfra/modelrun:latest
@@ -19,6 +21,21 @@ the `modelscope` CLI:
 ```bash
 docker run --rm ghcr.io/archinfra/modelrun:latest modelscope --help
 ```
+
+To enable Aliyun image publishing in Actions, configure these variables and
+secrets at the GitHub organization or repository level:
+
+- `ALIYUN_REGISTRY`
+  Example: `registry.cn-hangzhou.aliyuncs.com`
+- `ALIYUN_REGISTRY_NAMESPACE`
+  Example: your organization namespace in Aliyun ACR
+- `ALIYUN_IMAGE_NAME` (optional)
+  Defaults to the GitHub repository name when omitted
+- `ALIYUN_REGISTRY_USERNAME`
+- `ALIYUN_REGISTRY_PASSWORD`
+
+After that, branch pushes publish `branch`, `sha-*`, and `latest` tags, and git
+tag pushes publish the matching git tag to both GHCR and Aliyun ACR.
 
 Runtime paths:
 

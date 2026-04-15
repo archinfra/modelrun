@@ -14,6 +14,7 @@ import (
 )
 
 const defaultNPUExporterEndpoint = "http://127.0.0.1:9101/metrics"
+const alternateNPUExporterEndpoint = "http://127.0.0.1:8082/metrics"
 
 type NPUExporterStatus struct {
 	Endpoint         string           `json:"endpoint"`
@@ -39,19 +40,12 @@ type NPUExporterInstallResult struct {
 }
 
 func collectNPUExporter(client sshRunner, configuredEndpoint string) ([]domain.GPUInfo, error) {
-	out, err := fetchNPUExporterMetrics(client, npuExporterEndpoint(configuredEndpoint))
-	if err != nil {
-		return nil, err
-	}
-	devices := parseNPUExporterMetrics(out)
-	if len(devices) == 0 {
-		return nil, errors.New("npu exporter metrics did not contain npu devices")
-	}
-	return devices, nil
+	devices, _, err := collectNPUExporterWithEndpoint(client, configuredEndpoint)
+	return devices, err
 }
 
 func (c *Collector) NPUExporterStatus(server domain.ServerConfig, jump *SSHConfig) (NPUExporterStatus, error) {
-	endpoint := npuExporterEndpoint(server.NPUExporterEndpoint)
+	endpoint := firstNPUExporterEndpoint(server.NPUExporterEndpoint)
 	if IsMockServer(server) {
 		accelerators := []domain.GPUInfo{{Index: 0, Type: "npu", Name: "Ascend 910B", MemoryTotal: 65536, MemoryUsed: 8192, MemoryFree: 57344, Utilization: 28, Temperature: 65, PowerDraw: 180, Health: "OK"}}
 		return NPUExporterStatus{
@@ -69,7 +63,7 @@ func (c *Collector) NPUExporterStatus(server domain.ServerConfig, jump *SSHConfi
 	}
 	defer closeFn()
 
-	return npuExporterStatusFromClient(client, endpoint), nil
+	return npuExporterStatusFromClient(client, server.NPUExporterEndpoint), nil
 }
 
 func (c *Collector) InstallNPUExporter(server domain.ServerConfig, jump *SSHConfig, opts NPUExporterInstallOptions) (NPUExporterInstallResult, error) {
@@ -114,6 +108,10 @@ type sshRunner interface {
 }
 
 func npuExporterEndpoint(configured string) string {
+	return firstNPUExporterEndpoint(configured)
+}
+
+func firstNPUExporterEndpoint(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return strings.TrimSpace(configured)
 	}
@@ -121,6 +119,34 @@ func npuExporterEndpoint(configured string) string {
 		return env
 	}
 	return defaultNPUExporterEndpoint
+}
+
+func npuExporterEndpoints(configured string) []string {
+	candidates := []string{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == value {
+				return
+			}
+		}
+		candidates = append(candidates, value)
+	}
+
+	if strings.TrimSpace(configured) != "" {
+		add(configured)
+		return candidates
+	}
+
+	if env := strings.TrimSpace(os.Getenv("MODELRUN_NPU_EXPORTER_ENDPOINT")); env != "" {
+		add(env)
+	}
+	add(defaultNPUExporterEndpoint)
+	add(alternateNPUExporterEndpoint)
+	return candidates
 }
 
 func fetchNPUExporterMetrics(client sshRunner, endpoint string) (string, error) {
@@ -132,15 +158,36 @@ func fetchNPUExporterMetrics(client sshRunner, endpoint string) (string, error) 
 	return run(client, command)
 }
 
-func npuExporterStatusFromClient(client sshRunner, endpoint string) NPUExporterStatus {
-	status := NPUExporterStatus{Endpoint: endpoint}
-	out, err := fetchNPUExporterMetrics(client, endpoint)
+func collectNPUExporterWithEndpoint(client sshRunner, configured string) ([]domain.GPUInfo, string, error) {
+	var lastErr error
+	for _, endpoint := range npuExporterEndpoints(configured) {
+		out, err := fetchNPUExporterMetrics(client, endpoint)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		accelerators := parseNPUExporterMetrics(out)
+		if len(accelerators) == 0 {
+			lastErr = errors.New("npu exporter metrics did not contain npu devices")
+			continue
+		}
+		return accelerators, endpoint, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("npu exporter metrics did not contain npu devices")
+	}
+	return nil, firstNPUExporterEndpoint(configured), lastErr
+}
+
+func npuExporterStatusFromClient(client sshRunner, configured string) NPUExporterStatus {
+	status := NPUExporterStatus{Endpoint: firstNPUExporterEndpoint(configured)}
+	accelerators, endpoint, err := collectNPUExporterWithEndpoint(client, configured)
 	if err != nil {
 		status.Message = err.Error()
 		return status
 	}
 
-	accelerators := parseNPUExporterMetrics(out)
+	status.Endpoint = endpoint
 	status.Reachable = true
 	status.Accelerators = accelerators
 	status.AcceleratorCount = len(accelerators)

@@ -201,8 +201,11 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 	snapshot, err := a.collector.Collect(server, jump)
 	success := err == nil
 	message := snapshot.Message
+	var exporterStatus *collect.NPUExporterStatus
 	if err != nil {
 		message = err.Error()
+	} else if status, statusErr := a.collector.NPUExporterStatus(server, jump); statusErr == nil {
+		exporterStatus = &status
 	}
 
 	if err := a.store.Update(func(data *domain.Data) error {
@@ -216,6 +219,15 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 			data.Servers[idx].DriverVersion = snapshot.DriverVersion
 			data.Servers[idx].CUDAVersion = snapshot.CUDAVersion
 			data.Servers[idx].DockerVersion = snapshot.DockerVersion
+			if exporterStatus != nil {
+				data.Servers[idx].NPUExporterEndpoint = exporterStatus.Endpoint
+				if exporterStatus.Reachable {
+					data.Servers[idx].NPUExporterStatus = "online"
+				} else {
+					data.Servers[idx].NPUExporterStatus = "offline"
+				}
+				data.Servers[idx].NPUExporterLastCheck = domain.Now()
+			}
 			server = data.Servers[idx]
 		} else {
 			data.Servers[idx].Status = "offline"

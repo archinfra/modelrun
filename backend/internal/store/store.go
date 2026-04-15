@@ -129,6 +129,9 @@ func (s *Store) load() (domain.Data, error) {
 	if data.Tasks, err = loadCollection[domain.DeploymentTask](s.db, "tasks"); err != nil {
 		return data, err
 	}
+	if data.RemoteTasks, err = loadCollection[domain.RemoteTask](s.db, "remote_tasks"); err != nil {
+		return data, err
+	}
 	if data.Logs, err = loadCollection[domain.DeploymentLog](s.db, "logs"); err != nil {
 		return data, err
 	}
@@ -168,6 +171,9 @@ func (s *Store) save(data domain.Data) error {
 		return err
 	}
 	if err = saveCollection(tx, "tasks", data.Tasks, func(v domain.DeploymentTask, _ int) string { return v.ID }); err != nil {
+		return err
+	}
+	if err = saveCollection(tx, "remote_tasks", data.RemoteTasks, func(v domain.RemoteTask, _ int) string { return v.ID }); err != nil {
 		return err
 	}
 	if err = saveCollection(tx, "logs", data.Logs, func(_ domain.DeploymentLog, i int) string { return fmt.Sprintf("%08d", i) }); err != nil {
@@ -251,6 +257,7 @@ func isEmpty(data domain.Data) bool {
 		len(data.Models) == 0 &&
 		len(data.Deployments) == 0 &&
 		len(data.Tasks) == 0 &&
+		len(data.RemoteTasks) == 0 &&
 		len(data.Logs) == 0
 }
 
@@ -272,6 +279,9 @@ func ensureSlices(data *domain.Data) {
 	}
 	if data.Tasks == nil {
 		data.Tasks = []domain.DeploymentTask{}
+	}
+	if data.RemoteTasks == nil {
+		data.RemoteTasks = []domain.RemoteTask{}
 	}
 	if data.Logs == nil {
 		data.Logs = []domain.DeploymentLog{}

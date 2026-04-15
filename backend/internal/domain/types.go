@@ -176,6 +176,54 @@ type DeploymentTask struct {
 	OverallProgress int              `json:"overallProgress"`
 }
 
+type RemoteTask struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description,omitempty"`
+	ProjectID      string            `json:"projectId,omitempty"`
+	Scope          string            `json:"scope"`
+	Status         string            `json:"status"`
+	ExecutionType  string            `json:"executionType"`
+	CommandPreview string            `json:"commandPreview,omitempty"`
+	ScriptURL      string            `json:"scriptUrl,omitempty"`
+	ScriptArgs     string            `json:"scriptArgs,omitempty"`
+	PresetID       string            `json:"presetId,omitempty"`
+	PresetArgs     map[string]string `json:"presetArgs,omitempty"`
+	ServerIDs      []string          `json:"serverIds"`
+	Runs           []RemoteTaskRun   `json:"runs"`
+	CreatedAt      string            `json:"createdAt"`
+	StartedAt      string            `json:"startedAt,omitempty"`
+	FinishedAt     string            `json:"finishedAt,omitempty"`
+}
+
+type RemoteTaskRun struct {
+	ServerID   string `json:"serverId"`
+	ServerName string `json:"serverName,omitempty"`
+	Status     string `json:"status"`
+	Command    string `json:"command,omitempty"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ExitCode   int    `json:"exitCode,omitempty"`
+	StartedAt  string `json:"startedAt,omitempty"`
+	FinishedAt string `json:"finishedAt,omitempty"`
+}
+
+type RemoteTaskPreset struct {
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name"`
+	Description string                  `json:"description"`
+	Fields      []RemoteTaskPresetField `json:"fields,omitempty"`
+}
+
+type RemoteTaskPresetField struct {
+	Key          string `json:"key"`
+	Label        string `json:"label"`
+	Description  string `json:"description,omitempty"`
+	Required     bool   `json:"required,omitempty"`
+	DefaultValue string `json:"defaultValue,omitempty"`
+	Placeholder  string `json:"placeholder,omitempty"`
+}
+
 type ServerResource struct {
 	CPU struct {
 		Cores int     `json:"cores"`
@@ -213,6 +261,7 @@ type Data struct {
 	Models      []ModelConfig      `json:"models"`
 	Deployments []DeploymentConfig `json:"deployments"`
 	Tasks       []DeploymentTask   `json:"tasks"`
+	RemoteTasks []RemoteTask       `json:"remoteTasks"`
 	Logs        []DeploymentLog    `json:"logs"`
 }
 

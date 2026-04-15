@@ -45,6 +45,11 @@ module.exports = (env, argv) => {
     devServer: {
       port: 3266,
       allowedHosts: 'all',
+      client: {
+        webSocketURL: {
+          pathname: '/webpack-ws'
+        }
+      },
       proxy: [
         {
           context: ['/api', '/ws'],

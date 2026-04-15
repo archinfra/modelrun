@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - master
+    tags:
+      - '*'
   pull_request:
   workflow_dispatch:
 
@@ -13,9 +15,14 @@ permissions:
   packages: write
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE_NAME: ${{ github.repository }}
   MODELSCOPE_VERSION: 1.35.4
+  ALIYUN_REGISTRY: ${{ vars.ALIYUN_REGISTRY }}
+  ALIYUN_REGISTRY_NAMESPACE: ${{ vars.ALIYUN_REGISTRY_NAMESPACE }}
+  ALIYUN_IMAGE_NAME: ${{ vars.ALIYUN_IMAGE_NAME }}
+  ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+  ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
 jobs:
   frontend:
@@ -102,19 +109,60 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Aliyun Container Registry
+        if: github.event_name != 'pull_request' && env.ALIYUN_REGISTRY != '' && env.ALIYUN_REGISTRY_NAMESPACE != '' && env.ALIYUN_REGISTRY_USERNAME != '' && env.ALIYUN_REGISTRY_PASSWORD != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
 
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
+            type=ref,event=tag
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Prepare publish tags
+        id: publish-tags
+        shell: bash
+        env:
+          GHCR_IMAGE: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}
+          ALIYUN_REGISTRY: ${{ env.ALIYUN_REGISTRY }}
+          ALIYUN_REGISTRY_NAMESPACE: ${{ env.ALIYUN_REGISTRY_NAMESPACE }}
+          ALIYUN_IMAGE_NAME: ${{ env.ALIYUN_IMAGE_NAME }}
+          ALIYUN_REGISTRY_USERNAME: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          ALIYUN_REGISTRY_PASSWORD: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+        run: |
+          tags='${{ steps.meta.outputs.tags }}'
+          combined_tags="$tags"
+
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            aliyun_image_name="${ALIYUN_IMAGE_NAME:-${GITHUB_REPOSITORY##*/}}"
+            aliyun_image="${ALIYUN_REGISTRY}/${ALIYUN_REGISTRY_NAMESPACE}/${aliyun_image_name}"
+            while IFS= read -r tag; do
+              [[ -z "$tag" ]] && continue
+              suffix="${tag#${GHCR_IMAGE}:}"
+              combined_tags+=$'\n'"${aliyun_image}:${suffix}"
+            done <<< "$tags"
+          else
+            echo "::notice::Aliyun registry publish skipped because ALIYUN_REGISTRY / ALIYUN_REGISTRY_NAMESPACE / ALIYUN_REGISTRY_USERNAME / ALIYUN_REGISTRY_PASSWORD are not fully configured."
+          fi
+
+          {
+            echo 'value<<EOF'
+            echo "$combined_tags"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and publish image
         uses: docker/build-push-action@v6
@@ -122,7 +170,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.publish-tags.outputs.value }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             MODELSCOPE_VERSION=${{ env.MODELSCOPE_VERSION }}

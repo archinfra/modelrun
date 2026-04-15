@@ -8,28 +8,32 @@ import (
 
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/deploy"
+	"modelrun/backend/internal/dispatch"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/realtime"
 	"modelrun/backend/internal/store"
 )
 
 type API struct {
-	store     *store.Store
-	executor  *deploy.Executor
-	hub       *realtime.Hub
-	collector *collect.Collector
-	staticDir string
-	startedAt time.Time
+	store      *store.Store
+	executor   *deploy.Executor
+	hub        *realtime.Hub
+	collector  *collect.Collector
+	dispatcher *dispatch.Executor
+	staticDir  string
+	startedAt  time.Time
 }
 
 func New(st *store.Store, executor *deploy.Executor, hub *realtime.Hub, staticDir string) *API {
+	collector := collect.New()
 	return &API{
-		store:     st,
-		executor:  executor,
-		hub:       hub,
-		collector: collect.New(),
-		staticDir: staticDir,
-		startedAt: time.Now(),
+		store:      st,
+		executor:   executor,
+		hub:        hub,
+		collector:  collector,
+		dispatcher: dispatch.New(st, collector),
+		staticDir:  staticDir,
+		startedAt:  time.Now(),
 	}
 }
 
@@ -54,6 +58,9 @@ func (a *API) Routes() http.Handler {
 
 	mux.HandleFunc("/api/tasks", a.handleTasks)
 	mux.HandleFunc("/api/tasks/", a.handleTask)
+	mux.HandleFunc("/api/remote-task-presets", a.handleRemoteTaskPresets)
+	mux.HandleFunc("/api/remote-tasks", a.handleRemoteTasks)
+	mux.HandleFunc("/api/remote-tasks/", a.handleRemoteTask)
 
 	mux.HandleFunc("/ws", a.hub.ServeHTTP)
 

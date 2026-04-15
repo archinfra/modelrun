@@ -53,3 +53,23 @@ npu_chip_info_health_status{npuID="0",modelName="Ascend910B",uuid="uuid0",pcie="
 		t.Fatalf("unexpected memory metrics: %#v", device)
 	}
 }
+
+func TestNPUExporterEndpoints(t *testing.T) {
+	endpoints := npuExporterEndpoints("")
+	if len(endpoints) < 2 {
+		t.Fatalf("expected fallback endpoints, got %#v", endpoints)
+	}
+	if endpoints[0] != defaultNPUExporterEndpoint {
+		t.Fatalf("expected default endpoint first, got %#v", endpoints)
+	}
+	foundAlternate := false
+	for _, endpoint := range endpoints {
+		if endpoint == alternateNPUExporterEndpoint {
+			foundAlternate = true
+			break
+		}
+	}
+	if !foundAlternate {
+		t.Fatalf("expected alternate endpoint in candidates, got %#v", endpoints)
+	}
+}

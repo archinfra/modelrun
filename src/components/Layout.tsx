@@ -14,6 +14,7 @@ import {
   Search,
   Server,
   Settings,
+  Terminal,
   X,
 } from 'lucide-react';
 import { useAppStore } from '../store';
@@ -23,12 +24,13 @@ interface LayoutProps {
 }
 
 const menuItems = [
-  { path: '/dashboard', label: '项目看板', icon: LayoutDashboard },
-  { path: '/projects', label: '项目管理', icon: FolderKanban },
-  { path: '/models', label: '模型仓库', icon: Database },
-  { path: '/servers', label: '服务器', icon: Server },
-  { path: '/wizard', label: '部署向导', icon: Rocket },
-  { path: '/deployments', label: '部署列表', icon: List },
+  { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/projects', label: 'Projects', icon: FolderKanban },
+  { path: '/models', label: 'Models', icon: Database },
+  { path: '/servers', label: 'Servers', icon: Server },
+  { path: '/tasks', label: 'Task Dispatch', icon: Terminal },
+  { path: '/wizard', label: 'Deploy Wizard', icon: Rocket },
+  { path: '/deployments', label: 'Deployments', icon: List },
 ];
 
 const projectColors = [
@@ -46,13 +48,13 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
   const { projects, currentProjectId, setCurrentProject, addProject } = useAppStore();
 
-  const currentProject = projects.find((p) => p.id === currentProjectId);
+  const currentProject = projects.find((project) => project.id === currentProjectId);
 
   const handleCreateProject = () => {
     const now = new Date().toISOString();
     const newProject = {
       id: Date.now().toString(),
-      name: `项目 ${projects.length + 1}`,
+      name: `Project ${projects.length + 1}`,
       description: '',
       color: projectColors[projects.length % projectColors.length],
       createdAt: now,
@@ -78,22 +80,22 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             </div>
             <div>
               <h1 className="text-lg font-bold text-slate-900">ModelDeploy</h1>
-              <p className="text-xs text-slate-500">AI 模型部署平台</p>
+              <p className="text-xs text-slate-500">AI model operations workspace</p>
             </div>
           </div>
 
           <div className="mb-6">
             <label className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2 block">
-              当前项目
+              Current Project
             </label>
             <div className="relative">
               <button
-                onClick={() => setShowProjectMenu(!showProjectMenu)}
+                onClick={() => setShowProjectMenu((open) => !open)}
                 className="w-full flex items-center gap-3 px-4 py-3 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
               >
                 <div className={`w-3 h-3 rounded-full ${currentProject?.color || 'bg-slate-400'}`} />
                 <span className="flex-1 text-left font-medium text-slate-700 truncate">
-                  {currentProject?.name || '选择项目'}
+                  {currentProject?.name || 'Select project'}
                 </span>
                 <ChevronDown className="w-4 h-4 text-slate-400" />
               </button>
@@ -127,7 +129,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                         className="w-full flex items-center gap-3 px-3 py-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                       >
                         <Plus className="w-4 h-4" />
-                        <span className="text-sm font-medium">创建新项目</span>
+                        <span className="text-sm font-medium">Create project</span>
                       </button>
                       <Link
                         to="/projects"
@@ -135,7 +137,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                         className="w-full flex items-center gap-3 px-3 py-2 text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
                       >
                         <FolderKanban className="w-4 h-4" />
-                        <span className="text-sm font-medium">管理所有项目</span>
+                        <span className="text-sm font-medium">Manage projects</span>
                       </Link>
                     </div>
                   </div>
@@ -168,7 +170,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-200">
           <button className="w-full flex items-center gap-3 px-4 py-3 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
             <Settings className="w-5 h-5" />
-            <span className="font-medium">设置</span>
+            <span className="font-medium">Settings</span>
           </button>
         </div>
       </aside>
@@ -178,7 +180,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           <div className="flex items-center justify-between px-6 py-4">
             <div className="flex items-center gap-4">
               <button
-                onClick={() => setSidebarOpen(!sidebarOpen)}
+                onClick={() => setSidebarOpen((open) => !open)}
                 className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
               >
                 {sidebarOpen ? (
@@ -191,7 +193,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="搜索..."
+                  placeholder="Search..."
                   className="pl-10 pr-4 py-2 bg-slate-100 border-0 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 w-64"
                 />
               </div>

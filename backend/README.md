@@ -38,6 +38,9 @@ The service listens on `:8080` by default and writes SQLite state to
 - `GET /api/deployments/{id}/logs`
 - `GET /api/deployments/{id}/metrics`
 - `GET /api/tasks?deploymentId={id}`
+- `GET /api/remote-task-presets`
+- `GET|POST /api/remote-tasks`
+- `GET /api/remote-tasks/{id}`
 - `GET /ws`
 
 `POST /api/servers/{id}/test`, `GET /api/servers/{id}/resources`, and
@@ -50,6 +53,12 @@ The deployment executor currently simulates the Docker workflow and emits
 progress, status, log, and metric messages over WebSocket. Server discovery is
 real; deployment execution can be replaced with a real SSH/Docker executor
 without changing the UI contract.
+
+Remote task dispatch uses the same SSH and jump-host connectivity as server
+collection. It supports raw shell commands, remote script URLs downloaded via
+`curl`/`wget`, and built-in presets such as Docker-based NPU exporter install.
+Each task stores per-server execution status, output, error text, and
+timestamps so the frontend can poll and render the full rollout result.
 
 See `../docs/server-collection.md` for NPU prerequisites, exporter guidance,
 jump host setup, and troubleshooting.

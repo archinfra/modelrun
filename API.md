@@ -383,3 +383,58 @@ interface MonitorConfig {
   logRetentionDays: number;
 }
 ```
+
+## Remote Task Dispatch
+
+The application now includes a generic remote task dispatch capability for
+robots/servers. This is separate from deployment tasks and is designed for
+operational actions such as:
+
+- dispatching a raw shell command to one, many, or all robots
+- downloading a remote shell script URL and executing it remotely
+- running built-in operational presets like Docker-based NPU exporter install
+
+### REST Endpoints
+
+```typescript
+GET /api/remote-task-presets
+Response: RemoteTaskPreset[]
+
+GET /api/remote-tasks
+Response: RemoteTask[]
+
+POST /api/remote-tasks
+Body: {
+  name?: string;
+  description?: string;
+  projectId?: string;
+  scope: 'all' | 'project' | 'selected';
+  executionType: 'command' | 'script_url' | 'preset';
+  command?: string;
+  scriptUrl?: string;
+  scriptArgs?: string;
+  presetId?: string;
+  presetArgs?: Record<string, string>;
+  serverIds?: string[];
+}
+Response: RemoteTask
+
+GET /api/remote-tasks/:id
+Response: RemoteTask
+```
+
+### Supported Presets
+
+- `docker_install_npu_exporter`
+  Default image: `swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1`
+- `docker_pull_image`
+- `docker_restart_service`
+
+### Remote Task Result Model
+
+Each task stores:
+
+- top-level execution metadata and target scope
+- a resolved command preview
+- per-server run status (`pending`, `running`, `completed`, `failed`)
+- per-server stdout/error text and timestamps

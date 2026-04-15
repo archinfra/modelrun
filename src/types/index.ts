@@ -162,6 +162,59 @@ export interface DeploymentTask {
   overallProgress: number;
 }
 
+export type RemoteTaskScope = 'all' | 'project' | 'selected';
+export type RemoteTaskExecutionType = 'command' | 'script_url' | 'preset';
+export type RemoteTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'partial';
+export type RemoteTaskRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface RemoteTaskRun {
+  serverId: string;
+  serverName?: string;
+  status: RemoteTaskRunStatus;
+  command?: string;
+  output?: string;
+  error?: string;
+  exitCode?: number;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface RemoteTask {
+  id: string;
+  name: string;
+  description?: string;
+  projectId?: string;
+  scope: RemoteTaskScope;
+  status: RemoteTaskStatus;
+  executionType: RemoteTaskExecutionType;
+  commandPreview?: string;
+  scriptUrl?: string;
+  scriptArgs?: string;
+  presetId?: string;
+  presetArgs?: Record<string, string>;
+  serverIds: string[];
+  runs: RemoteTaskRun[];
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface RemoteTaskPresetField {
+  key: string;
+  label: string;
+  description?: string;
+  required?: boolean;
+  defaultValue?: string;
+  placeholder?: string;
+}
+
+export interface RemoteTaskPreset {
+  id: string;
+  name: string;
+  description: string;
+  fields?: RemoteTaskPresetField[];
+}
+
 export type WizardStep =
   | 'model'
   | 'docker'
