@@ -47,6 +47,9 @@ func defaultServer(server *domain.ServerConfig, projectID string) {
 	if server.Status == "" {
 		server.Status = "offline"
 	}
+	if !server.UseJumpHost {
+		server.JumpHostID = ""
+	}
 }
 
 func defaultModel(model *domain.ModelConfig) {

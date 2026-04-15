@@ -18,27 +18,32 @@ type Project struct {
 }
 
 type ServerConfig struct {
-	ID            string    `json:"id"`
-	ProjectID     string    `json:"projectId"`
-	Name          string    `json:"name"`
-	Host          string    `json:"host"`
-	SSHPort       int       `json:"sshPort"`
-	Username      string    `json:"username"`
-	AuthType      string    `json:"authType"`
-	Password      string    `json:"password,omitempty"`
-	PrivateKey    string    `json:"privateKey,omitempty"`
-	UseJumpHost   bool      `json:"useJumpHost"`
-	JumpHostID    string    `json:"jumpHostId,omitempty"`
-	GPUInfo       []GPUInfo `json:"gpuInfo,omitempty"`
-	DriverVersion string    `json:"driverVersion,omitempty"`
-	CUDAVersion   string    `json:"cudaVersion,omitempty"`
-	DockerVersion string    `json:"dockerVersion,omitempty"`
-	LastCheck     string    `json:"lastCheck,omitempty"`
-	Status        string    `json:"status"`
+	ID                   string    `json:"id"`
+	ProjectID            string    `json:"projectId"`
+	Name                 string    `json:"name"`
+	Host                 string    `json:"host"`
+	SSHPort              int       `json:"sshPort"`
+	Username             string    `json:"username"`
+	AuthType             string    `json:"authType"`
+	Password             string    `json:"password,omitempty"`
+	PrivateKey           string    `json:"privateKey,omitempty"`
+	IsJumpHost           bool      `json:"isJumpHost,omitempty"`
+	UseJumpHost          bool      `json:"useJumpHost"`
+	JumpHostID           string    `json:"jumpHostId,omitempty"`
+	GPUInfo              []GPUInfo `json:"gpuInfo,omitempty"`
+	DriverVersion        string    `json:"driverVersion,omitempty"`
+	CUDAVersion          string    `json:"cudaVersion,omitempty"`
+	DockerVersion        string    `json:"dockerVersion,omitempty"`
+	NPUExporterEndpoint  string    `json:"npuExporterEndpoint,omitempty"`
+	NPUExporterStatus    string    `json:"npuExporterStatus,omitempty"`
+	NPUExporterLastCheck string    `json:"npuExporterLastCheck,omitempty"`
+	LastCheck            string    `json:"lastCheck,omitempty"`
+	Status               string    `json:"status"`
 }
 
 type GPUInfo struct {
 	Index       int     `json:"index"`
+	Type        string  `json:"type,omitempty"`
 	Name        string  `json:"name"`
 	MemoryTotal int64   `json:"memoryTotal"`
 	MemoryUsed  int64   `json:"memoryUsed"`
@@ -47,6 +52,9 @@ type GPUInfo struct {
 	Temperature float64 `json:"temperature"`
 	PowerDraw   float64 `json:"powerDraw"`
 	PowerLimit  float64 `json:"powerLimit"`
+	Health      string  `json:"health,omitempty"`
+	LogicID     int     `json:"logicId,omitempty"`
+	ChipID      int     `json:"chipId,omitempty"`
 }
 
 type JumpHost struct {

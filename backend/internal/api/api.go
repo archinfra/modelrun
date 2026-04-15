@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/realtime"
@@ -16,6 +17,7 @@ type API struct {
 	store     *store.Store
 	executor  *deploy.Executor
 	hub       *realtime.Hub
+	collector *collect.Collector
 	staticDir string
 	startedAt time.Time
 }
@@ -25,6 +27,7 @@ func New(st *store.Store, executor *deploy.Executor, hub *realtime.Hub, staticDi
 		store:     st,
 		executor:  executor,
 		hub:       hub,
+		collector: collect.New(),
 		staticDir: staticDir,
 		startedAt: time.Now(),
 	}

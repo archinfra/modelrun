@@ -18,18 +18,23 @@ export interface ServerConfig {
   authType: 'password' | 'key';
   password?: string;
   privateKey?: string;
+  isJumpHost?: boolean;
   useJumpHost: boolean;
   jumpHostId?: string;
   gpuInfo?: GPUInfo[];
   driverVersion?: string;
   cudaVersion?: string;
   dockerVersion?: string;
+  npuExporterEndpoint?: string;
+  npuExporterStatus?: string;
+  npuExporterLastCheck?: string;
   lastCheck?: string;
   status: 'online' | 'offline' | 'checking';
 }
 
 export interface GPUInfo {
   index: number;
+  type?: 'gpu' | 'npu';
   name: string;
   memoryTotal: number;
   memoryUsed: number;
@@ -38,6 +43,9 @@ export interface GPUInfo {
   temperature: number;
   powerDraw: number;
   powerLimit: number;
+  health?: string;
+  logicId?: number;
+  chipId?: number;
 }
 
 export interface JumpHost {

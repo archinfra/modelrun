@@ -2,14 +2,10 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
-	"net"
+	"errors"
 	"net/http"
-	"os"
-	"strconv"
-	"strings"
-	"time"
 
+	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/store"
 )
@@ -68,6 +64,10 @@ func (a *API) handleServer(w http.ResponseWriter, r *http.Request) {
 		a.handleServerItem(w, r, id)
 		return
 	}
+	if rest[0] == "npu-exporter" {
+		a.handleServerNPUExporter(w, r, id, rest[1:])
+		return
+	}
 	if len(rest) != 1 {
 		http.NotFound(w, r)
 		return
@@ -95,6 +95,26 @@ func (a *API) handleServer(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (a *API) handleServerNPUExporter(w http.ResponseWriter, r *http.Request, id string, rest []string) {
+	if len(rest) == 0 {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		a.handleServerNPUExporterStatus(w, id)
+		return
+	}
+	if len(rest) == 1 && rest[0] == "install" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		a.handleServerNPUExporterInstall(w, r, id)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (a *API) handleServerItem(w http.ResponseWriter, r *http.Request, id string) {
@@ -172,10 +192,17 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 	}
 
 	server := data.Servers[idx]
-	success, message := probeSSH(server)
-	status := "offline"
-	if success {
-		status = "online"
+	jump, err := resolveJumpHost(data, server)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	snapshot, err := a.collector.Collect(server, jump)
+	success := err == nil
+	message := snapshot.Message
+	if err != nil {
+		message = err.Error()
 	}
 
 	if err := a.store.Update(func(data *domain.Data) error {
@@ -183,23 +210,17 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 		if idx < 0 {
 			return store.ErrNotFound
 		}
-		data.Servers[idx].Status = status
-		data.Servers[idx].LastCheck = domain.Now()
 		if success {
-			if len(data.Servers[idx].GPUInfo) == 0 {
-				data.Servers[idx].GPUInfo = mockGPUs(id)
-			}
-			if data.Servers[idx].DriverVersion == "" {
-				data.Servers[idx].DriverVersion = "535.104.05"
-			}
-			if data.Servers[idx].CUDAVersion == "" {
-				data.Servers[idx].CUDAVersion = "12.2"
-			}
-			if data.Servers[idx].DockerVersion == "" {
-				data.Servers[idx].DockerVersion = "24.0.7"
-			}
+			data.Servers[idx].Status = "online"
+			data.Servers[idx].GPUInfo = snapshot.Accelerators
+			data.Servers[idx].DriverVersion = snapshot.DriverVersion
+			data.Servers[idx].CUDAVersion = snapshot.CUDAVersion
+			data.Servers[idx].DockerVersion = snapshot.DockerVersion
 			server = data.Servers[idx]
+		} else {
+			data.Servers[idx].Status = "offline"
 		}
+		data.Servers[idx].LastCheck = domain.Now()
 		return nil
 	}); err != nil {
 		writeStoreError(w, err)
@@ -212,6 +233,9 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 		"gpuInfo":       server.GPUInfo,
 		"driverVersion": server.DriverVersion,
 		"cudaVersion":   server.CUDAVersion,
+		"dockerVersion": server.DockerVersion,
+		"resources":     snapshot.Resources,
+		"server":        server,
 	})
 }
 
@@ -223,7 +247,18 @@ func (a *API) handleServerResources(w http.ResponseWriter, id string) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, makeResource(data.Servers[idx]))
+	jump, err := resolveJumpHost(data, data.Servers[idx])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	resource, err := a.collector.Resources(data.Servers[idx], jump)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resource)
 }
 
 func (a *API) handleServerGPU(w http.ResponseWriter, id string) {
@@ -234,66 +269,118 @@ func (a *API) handleServerGPU(w http.ResponseWriter, id string) {
 		return
 	}
 
-	gpus := data.Servers[idx].GPUInfo
-	if len(gpus) == 0 {
-		gpus = mockGPUs(id)
+	jump, err := resolveJumpHost(data, data.Servers[idx])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
+	gpus, err := a.collector.Accelerators(data.Servers[idx], jump)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if err := a.store.Update(func(data *domain.Data) error {
+		idx := findServer(data.Servers, id)
+		if idx < 0 {
+			return store.ErrNotFound
+		}
+		data.Servers[idx].GPUInfo = gpus
+		data.Servers[idx].LastCheck = domain.Now()
+		return nil
+	}); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, gpus)
 }
 
-func probeSSH(server domain.ServerConfig) (bool, string) {
-	if server.Host == "" {
-		return false, "server host is empty"
+func (a *API) handleServerNPUExporterStatus(w http.ResponseWriter, id string) {
+	data := a.store.Snapshot()
+	idx := findServer(data.Servers, id)
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, store.ErrNotFound)
+		return
 	}
 
-	port := server.SSHPort
-	if port == 0 {
-		port = 22
-	}
-
-	if os.Getenv("MODELRUN_FAKE_CONNECT") == "1" || strings.HasPrefix(server.Host, "mock") {
-		return true, "mock connection succeeded"
-	}
-
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(server.Host, strconv.Itoa(port)), 1500*time.Millisecond)
+	server := data.Servers[idx]
+	jump, err := resolveJumpHost(data, server)
 	if err != nil {
-		return false, fmt.Sprintf("tcp connection failed: %v", err)
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
-	_ = conn.Close()
-
-	return true, "ssh port is reachable"
-}
-
-func makeResource(server domain.ServerConfig) domain.ServerResource {
-	gpus := server.GPUInfo
-	if len(gpus) == 0 {
-		gpus = mockGPUs(server.ID)
+	status, err := a.collector.NPUExporterStatus(server, jump)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
 	}
 
-	var resource domain.ServerResource
-	resource.CPU.Cores = maxInt(8, len(gpus)*16)
-	resource.CPU.Usage = 22.5
-	resource.Memory.Total = int64(resource.CPU.Cores) * 4096
-	resource.Memory.Used = resource.Memory.Total / 3
-	resource.Memory.Free = resource.Memory.Total - resource.Memory.Used
-	resource.Disk.Total = 4 * 1024 * 1024
-	resource.Disk.Used = resource.Disk.Total / 2
-	resource.Disk.Free = resource.Disk.Total - resource.Disk.Used
-	resource.Network.RXSpeed = 12.5
-	resource.Network.TXSpeed = 8.2
-	return resource
-}
-
-func mockGPUs(seed string) []domain.GPUInfo {
-	if len(seed)%2 == 0 {
-		return []domain.GPUInfo{
-			{Index: 0, Name: "NVIDIA A100 80GB", MemoryTotal: 81920, MemoryUsed: 24576, MemoryFree: 57344, Utilization: 45, Temperature: 72, PowerDraw: 285, PowerLimit: 400},
-			{Index: 1, Name: "NVIDIA A100 80GB", MemoryTotal: 81920, MemoryUsed: 18432, MemoryFree: 63488, Utilization: 32, Temperature: 68, PowerDraw: 240, PowerLimit: 400},
+	if err := a.store.Update(func(data *domain.Data) error {
+		idx := findServer(data.Servers, id)
+		if idx < 0 {
+			return store.ErrNotFound
 		}
+		data.Servers[idx].NPUExporterEndpoint = status.Endpoint
+		if status.Reachable {
+			data.Servers[idx].NPUExporterStatus = "online"
+		} else {
+			data.Servers[idx].NPUExporterStatus = "offline"
+		}
+		data.Servers[idx].NPUExporterLastCheck = domain.Now()
+		return nil
+	}); err != nil {
+		writeStoreError(w, err)
+		return
 	}
-	return []domain.GPUInfo{
-		{Index: 0, Name: "NVIDIA A100 40GB", MemoryTotal: 40960, MemoryUsed: 8192, MemoryFree: 32768, Utilization: 28, Temperature: 65, PowerDraw: 180, PowerLimit: 250},
+
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (a *API) handleServerNPUExporterInstall(w http.ResponseWriter, r *http.Request, id string) {
+	var opts collect.NPUExporterInstallOptions
+	if err := readJSON(r, &opts); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
+
+	data := a.store.Snapshot()
+	idx := findServer(data.Servers, id)
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, store.ErrNotFound)
+		return
+	}
+
+	server := data.Servers[idx]
+	jump, err := resolveJumpHost(data, server)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := a.collector.InstallNPUExporter(server, jump, opts)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	if err := a.store.Update(func(data *domain.Data) error {
+		idx := findServer(data.Servers, id)
+		if idx < 0 {
+			return store.ErrNotFound
+		}
+		data.Servers[idx].NPUExporterEndpoint = result.Endpoint
+		if result.Status.Reachable {
+			data.Servers[idx].NPUExporterStatus = "online"
+		} else {
+			data.Servers[idx].NPUExporterStatus = "offline"
+		}
+		data.Servers[idx].NPUExporterLastCheck = domain.Now()
+		return nil
+	}); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func findServer(servers []domain.ServerConfig, id string) int {
@@ -303,4 +390,31 @@ func findServer(servers []domain.ServerConfig, id string) int {
 		}
 	}
 	return -1
+}
+
+func resolveJumpHost(data domain.Data, server domain.ServerConfig) (*collect.SSHConfig, error) {
+	if collect.IsMockServer(server) || !server.UseJumpHost {
+		return nil, nil
+	}
+	if server.JumpHostID == "" {
+		return nil, errors.New("jumpHostId is required when useJumpHost is true")
+	}
+	if server.JumpHostID == server.ID {
+		return nil, errors.New("server cannot use itself as jump host")
+	}
+
+	for _, candidate := range data.Servers {
+		if candidate.ID == server.JumpHostID {
+			config := collect.FromServer(candidate)
+			return &config, nil
+		}
+	}
+	for _, candidate := range data.JumpHosts {
+		if candidate.ID == server.JumpHostID {
+			config := collect.FromJumpHost(candidate)
+			return &config, nil
+		}
+	}
+
+	return nil, errors.New("jump host not found")
 }

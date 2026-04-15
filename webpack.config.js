@@ -45,6 +45,14 @@ module.exports = (env, argv) => {
     devServer: {
       port: 3266,
       allowedHosts: 'all',
+      proxy: [
+        {
+          context: ['/api', '/ws'],
+          target: 'http://127.0.0.1:8080',
+          changeOrigin: true,
+          ws: true
+        }
+      ],
       historyApiFallback: {
         index: '/index.html',
         rewrites: [

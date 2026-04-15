@@ -26,6 +26,9 @@ The service listens on `:8080` by default and writes SQLite state to
 - `GET|POST /api/servers`
 - `POST /api/servers/{id}/test`
 - `GET /api/servers/{id}/resources`
+- `GET /api/servers/{id}/gpu`
+- `GET /api/servers/{id}/npu-exporter`
+- `POST /api/servers/{id}/npu-exporter/install`
 - `GET|POST /api/models`
 - `POST /api/models/scan`
 - `GET /api/models/search?source=modelscope&q=qwen`
@@ -37,7 +40,16 @@ The service listens on `:8080` by default and writes SQLite state to
 - `GET /api/tasks?deploymentId={id}`
 - `GET /ws`
 
-The deployment executor currently simulates the SSH/Docker workflow and emits
-progress, status, log, and metric messages over WebSocket. The API and storage
-layers are shaped around the frontend TypeScript types so the real SSH/Docker
-executor can be swapped in later without changing the UI contract.
+`POST /api/servers/{id}/test`, `GET /api/servers/{id}/resources`, and
+`GET /api/servers/{id}/gpu` use real SSH collection. The collector supports
+direct SSH and SSH through a server marked as a jump host. It reads Linux system
+files plus `nvidia-smi`, `npu-smi info`, optional NPU Exporter Prometheus
+metrics, and `docker --version`.
+
+The deployment executor currently simulates the Docker workflow and emits
+progress, status, log, and metric messages over WebSocket. Server discovery is
+real; deployment execution can be replaced with a real SSH/Docker executor
+without changing the UI contract.
+
+See `../docs/server-collection.md` for NPU prerequisites, exporter guidance,
+jump host setup, and troubleshooting.

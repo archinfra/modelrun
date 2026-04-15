@@ -27,6 +27,7 @@ interface AppState {
   setCurrentProject: (id: string | null) => void;
 
   addServer: (server: ServerConfig) => void;
+  setServers: (servers: ServerConfig[]) => void;
   updateServer: (id: string, server: Partial<ServerConfig>) => void;
   removeServer: (id: string) => void;
 
@@ -103,6 +104,16 @@ export const useAppStore = create<AppState>()(
               ? { ...project, serverIds: [...project.serverIds, server.id], updatedAt: new Date().toISOString() }
               : project
           ),
+        })),
+      setServers: (servers) =>
+        set((state) => ({
+          servers,
+          projects: state.projects.map((project) => ({
+            ...project,
+            serverIds: servers
+              .filter((server) => server.projectId === project.id)
+              .map((server) => server.id),
+          })),
         })),
       updateServer: (id, server) =>
         set((state) => ({

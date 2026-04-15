@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Thermometer, Zap, Activity, HardDrive } from 'lucide-react';
+import { Activity, HardDrive, Thermometer, Zap } from 'lucide-react';
 import { GPUInfo } from '../types';
 
 interface GPUCardProps {
@@ -8,9 +8,15 @@ interface GPUCardProps {
   index: number;
 }
 
+const formatMB = (value: number) => {
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} GB`;
+  return `${value.toFixed(0)} MB`;
+};
+
 export const GPUCard: React.FC<GPUCardProps> = ({ gpu, index }) => {
-  const memoryPercent = (gpu.memoryUsed / gpu.memoryTotal) * 100;
-  const powerPercent = (gpu.powerDraw / gpu.powerLimit) * 100;
+  const memoryPercent = gpu.memoryTotal > 0 ? (gpu.memoryUsed / gpu.memoryTotal) * 100 : 0;
+  const powerPercent = gpu.powerLimit > 0 ? (gpu.powerDraw / gpu.powerLimit) * 100 : 0;
+  const label = gpu.type === 'npu' ? 'NPU' : 'GPU';
 
   const getTempColor = (temp: number) => {
     if (temp < 60) return 'text-green-400';
@@ -32,9 +38,10 @@ export const GPUCard: React.FC<GPUCardProps> = ({ gpu, index }) => {
       className="bg-slate-900/80 border border-slate-700 rounded-lg p-4 font-mono text-sm"
     >
       <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className="text-slate-500">GPU {gpu.index}</span>
-          <span className="text-slate-300 font-medium">{gpu.name}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-slate-500">{label} {gpu.index}</span>
+          <span className="text-slate-300 font-medium truncate">{gpu.name}</span>
+          {gpu.health && <span className="text-xs text-slate-500">{gpu.health}</span>}
         </div>
         <div className={`flex items-center gap-1 ${getTempColor(gpu.temperature)}`}>
           <Thermometer className="w-3 h-3" />
@@ -46,15 +53,15 @@ export const GPUCard: React.FC<GPUCardProps> = ({ gpu, index }) => {
         <div className="bg-slate-800/50 rounded p-2">
           <div className="flex items-center gap-1 text-slate-500 mb-1">
             <HardDrive className="w-3 h-3" />
-            <span>显存</span>
+            <span>{gpu.type === 'npu' ? 'HBM' : '显存'}</span>
           </div>
           <div className="text-slate-300">
-            {gpu.memoryUsed.toFixed(1)} / {gpu.memoryTotal.toFixed(1)} GB
+            {formatMB(gpu.memoryUsed)} / {formatMB(gpu.memoryTotal)}
           </div>
           <div className="w-full h-1 bg-slate-700 rounded mt-1">
             <div
               className={`h-full rounded ${memoryPercent > 80 ? 'bg-red-500' : memoryPercent > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
-              style={{ width: `${memoryPercent}%` }}
+              style={{ width: `${Math.min(memoryPercent, 100)}%` }}
             />
           </div>
         </div>
@@ -70,7 +77,7 @@ export const GPUCard: React.FC<GPUCardProps> = ({ gpu, index }) => {
           <div className="w-full h-1 bg-slate-700 rounded mt-1">
             <div
               className="h-full rounded bg-blue-500"
-              style={{ width: `${powerPercent}%` }}
+              style={{ width: `${Math.min(powerPercent, 100)}%` }}
             />
           </div>
         </div>
@@ -82,7 +89,7 @@ export const GPUCard: React.FC<GPUCardProps> = ({ gpu, index }) => {
           <span>利用率 {gpu.utilization}%</span>
         </div>
         <div className="text-slate-500">
-          空闲 {gpu.memoryFree.toFixed(1)} GB
+          空闲 {formatMB(gpu.memoryFree)}
         </div>
       </div>
     </motion.div>

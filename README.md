@@ -25,3 +25,13 @@ Runtime paths:
 - `MODELRUN_DATA=/var/lib/modelrun/modelrun.db`
 - `MODELRUN_STATIC_DIR=/app/dist`
 - `MODELSCOPE_CACHE=/var/lib/modelrun/modelscope`
+
+## Server Collection
+
+Server status, GPU/NPU inventory, NPU Exporter metrics, and Docker details are
+collected by the Go backend over SSH. The frontend no longer fabricates GPU data
+for newly added servers. Jump hosts are supported by marking one server as
+`isJumpHost` and setting other internal servers to `useJumpHost`.
+
+See [docs/server-collection.md](docs/server-collection.md) for the exact SSH
+commands, NPU exporter guidance, jump host flow, and troubleshooting notes.
