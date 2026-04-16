@@ -211,6 +211,7 @@ func deploymentCacheDir(runtime domain.DeploymentRuntimeConfig, deployment domai
 
 func buildPrepareModelCommand(deployment domain.DeploymentConfig, workDir, modelHostPath string) (string, error) {
 	commands := []string{"set -e", "mkdir -p " + shellQuote(workDir)}
+	privilegedPaths := []string{workDir}
 
 	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
 	case "", "local":
@@ -226,6 +227,7 @@ func buildPrepareModelCommand(deployment domain.DeploymentConfig, workDir, model
 		if strings.TrimSpace(deployment.Model.ModelID) == "" {
 			return "", fmt.Errorf("modelId is required for modelscope source")
 		}
+		privilegedPaths = append(privilegedPaths, modelHostPath)
 		commands = append(commands,
 			"mkdir -p "+shellQuote(modelHostPath),
 			"export PATH=\"$PATH:$HOME/.local/bin\"",
@@ -236,6 +238,7 @@ func buildPrepareModelCommand(deployment domain.DeploymentConfig, workDir, model
 		if strings.TrimSpace(deployment.Model.ModelID) == "" {
 			return "", fmt.Errorf("modelId is required for huggingface source")
 		}
+		privilegedPaths = append(privilegedPaths, modelHostPath)
 		commands = append(commands,
 			"mkdir -p "+shellQuote(modelHostPath),
 			"export PATH=\"$PATH:$HOME/.local/bin\"",
@@ -246,7 +249,11 @@ func buildPrepareModelCommand(deployment domain.DeploymentConfig, workDir, model
 		return "", fmt.Errorf("unsupported model source %q", deployment.Model.Source)
 	}
 
-	return strings.Join(commands, " && "), nil
+	return withPathPrivileges(
+		strings.Join(commands, " && "),
+		privilegedPaths,
+		"model preparation requires write access to the managed runtime directories. Configure a writable runtime path or allow passwordless sudo for the SSH user.",
+	), nil
 }
 
 func buildLaunchRuntimeCommand(template domain.PipelineTemplate, deployment domain.DeploymentConfig, docker domain.DockerConfig, runtime domain.DeploymentRuntimeConfig, server domain.ServerConfig, servers []domain.ServerConfig, modelHostPath, workDir, cacheDir string) (string, error) {
@@ -271,7 +278,11 @@ func buildLaunchRuntimeCommand(template domain.PipelineTemplate, deployment doma
 
 	dockerCommand := buildDockerRunCommand(template, deployment, docker, runtime, containerName, modelHostPath, workDir, cacheDir)
 	commands = append(commands, dockerCommand)
-	return strings.Join(commands, " && "), nil
+	return withPathPrivileges(
+		strings.Join(commands, " && "),
+		[]string{workDir, cacheDir},
+		"runtime launch needs write access to the deployment work or cache directory. Configure a writable runtime path or allow passwordless sudo for the SSH user.",
+	), nil
 }
 
 func frameworkLaunchAssets(template domain.PipelineTemplate, deployment domain.DeploymentConfig, server domain.ServerConfig, servers []domain.ServerConfig) (string, string, error) {
@@ -588,6 +599,59 @@ func withDockerPrivileges(body string) string {
 		"return 1;",
 		"};",
 		body,
+	}, " ")
+}
+
+func withPathPrivileges(body string, paths []string, failureHint string) string {
+	candidates := make([]string, 0, len(paths))
+	seen := map[string]struct{}{}
+	for _, value := range paths {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		candidates = append(candidates, shellQuote(value))
+	}
+	if len(candidates) == 0 {
+		return body
+	}
+
+	return strings.Join([]string{
+		"can_write_target(){",
+		"target=\"$1\";",
+		"current=\"$target\";",
+		"while [ ! -e \"$current\" ] && [ \"$current\" != \"/\" ]; do current=$(dirname \"$current\"); done;",
+		"[ -w \"$current\" ];",
+		"};",
+		"run_with_optional_sudo(){",
+		"if [ \"$(id -u)\" -eq 0 ]; then",
+		"sh -lc " + shellQuote(body) + ";",
+		"return $?;",
+		"fi;",
+		"need_sudo=0;",
+		"for target in " + strings.Join(candidates, " ") + "; do",
+		"if ! can_write_target \"$target\"; then need_sudo=1; break; fi;",
+		"done;",
+		"if [ \"$need_sudo\" -eq 0 ]; then",
+		"sh -lc " + shellQuote(body) + ";",
+		"return $?;",
+		"fi;",
+		"if command -v sudo >/dev/null 2>&1; then",
+		"sudo -n sh -lc " + shellQuote(body) + ";",
+		"status=$?;",
+		"if [ $status -ne 0 ]; then",
+		"echo " + shellQuote(failureHint) + " >&2;",
+		"fi;",
+		"return $status;",
+		"fi;",
+		"echo " + shellQuote(failureHint) + " >&2;",
+		"return 1;",
+		"};",
+		"run_with_optional_sudo",
 	}, " ")
 }
 

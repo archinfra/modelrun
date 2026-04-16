@@ -54,6 +54,50 @@ npu_chip_info_health_status{npuID="0",modelName="Ascend910B",uuid="uuid0",pcie="
 	}
 }
 
+func TestParseNPUExporterMetricsPrefersHBMMemoryOverGenericZeroMetrics(t *testing.T) {
+	out := `
+npu_chip_info_name{id="0",name="910B2n-Ascend-V1"} 1 1776313463623
+npu_chip_info_hbm_total_memory{id="0"} 65536 1776313463623
+npu_chip_info_hbm_used_memory{id="0"} 3399 1776313463623
+npu_chip_info_power{id="0"} 97.4 1776313463623
+npu_chip_info_temperature{id="0"} 36 1776313463623
+npu_chip_info_total_memory{id="0"} 0 1776313463623
+npu_chip_info_used_memory{id="0"} 0 1776313463623
+`
+
+	devices := parseNPUExporterMetrics(out)
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	device := devices[0]
+	if device.Name != "910B2n-Ascend-V1" {
+		t.Fatalf("unexpected name: %#v", device)
+	}
+	if device.MemoryTotal != 65536 || device.MemoryUsed != 3399 || device.MemoryFree != 62137 {
+		t.Fatalf("expected HBM memory to win over zero generic metrics, got %#v", device)
+	}
+}
+
+func TestNormalizeAcceleratorMemory(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  int64
+	}{
+		{name: "mib", value: 65536, want: 65536},
+		{name: "kib", value: 67108864, want: 65536},
+		{name: "bytes", value: 68719476736, want: 65536},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeAcceleratorMemory(tt.value); got != tt.want {
+				t.Fatalf("normalizeAcceleratorMemory(%v) = %d, want %d", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNPUExporterEndpoints(t *testing.T) {
 	endpoints := npuExporterEndpoints("")
 	if len(endpoints) < 2 {

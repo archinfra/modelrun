@@ -31,6 +31,10 @@ type DraftState = {
   rayEnabled: boolean;
   rayHeadServerId: string;
   rayNICName: string;
+  workDir: string;
+  modelDir: string;
+  cacheDir: string;
+  sharedCacheDir: string;
   extraArgsText: string;
 };
 
@@ -47,6 +51,10 @@ const createDraft = (): DraftState => ({
   rayEnabled: false,
   rayHeadServerId: '',
   rayNICName: '',
+  workDir: '',
+  modelDir: '',
+  cacheDir: '',
+  sharedCacheDir: '',
   extraArgsText: '',
 });
 
@@ -110,6 +118,10 @@ export const DeployWizard: React.FC = () => {
       dockerImage: selectedTemplate.defaultDocker.image,
       dockerTag: selectedTemplate.defaultDocker.tag,
       apiPort: selectedTemplate.defaultPort,
+      workDir: selectedTemplate.defaultRuntime.workDir || '',
+      modelDir: selectedTemplate.defaultRuntime.modelDir || '',
+      cacheDir: selectedTemplate.defaultRuntime.cacheDir || '',
+      sharedCacheDir: selectedTemplate.defaultRuntime.sharedCacheDir || '',
     }));
   }, [selectedTemplate?.framework]);
 
@@ -170,7 +182,14 @@ export const DeployWizard: React.FC = () => {
           model,
           docker: { image: draft.dockerImage, tag: draft.dockerTag, gpuDevices: 'all', shmSize: '16g', environmentVars: {}, volumes: [], network: 'host', ipc: 'host', privileged: draft.framework !== 'tei' },
           ray: { enabled: draft.rayEnabled, headServerId: draft.rayHeadServerId, nicName: draft.rayNICName, port: 6379, dashboardPort: 8265 },
-          runtime: { workDir: '/opt/modelrun/deployments', modelDir: '/opt/modelrun/models', cacheDir: '/opt/modelrun/cache', enableAutoRestart: true, extraArgs: draft.extraArgsText.split('\n').map((item) => item.trim()).filter(Boolean) },
+          runtime: {
+            workDir: draft.workDir.trim(),
+            modelDir: draft.modelDir.trim(),
+            cacheDir: draft.cacheDir.trim(),
+            sharedCacheDir: draft.sharedCacheDir.trim(),
+            enableAutoRestart: true,
+            extraArgs: draft.extraArgsText.split('\n').map((item) => item.trim()).filter(Boolean),
+          },
           vllm: selectedTemplate.defaultVllm,
           servers: draft.serverIds,
           apiPort: draft.apiPort,
@@ -286,6 +305,15 @@ export const DeployWizard: React.FC = () => {
                 <Field label="Ray NIC" value={draft.rayNICName} onChange={(value) => setDraft((current) => ({ ...current, rayNICName: value }))} />
               </div>
             )}
+            <div className="grid gap-4 md:grid-cols-2 mt-4">
+              <Field label="工作目录" value={draft.workDir} onChange={(value) => setDraft((current) => ({ ...current, workDir: value }))} />
+              <Field label="模型目录" value={draft.modelDir} onChange={(value) => setDraft((current) => ({ ...current, modelDir: value }))} />
+              <Field label="缓存目录" value={draft.cacheDir} onChange={(value) => setDraft((current) => ({ ...current, cacheDir: value }))} />
+              <Field label="共享缓存目录（可选）" value={draft.sharedCacheDir} onChange={(value) => setDraft((current) => ({ ...current, sharedCacheDir: value }))} />
+            </div>
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              下载模型、创建目录和写启动脚本时，系统会先判断当前 SSH 用户是否对这些目录有写权限；如果没有，再自动尝试使用 `sudo -n`。
+            </div>
             <div className="mt-4">
               <label className="block text-sm font-medium text-slate-700 mb-1">Extra args (one per line)</label>
               <textarea rows={4} value={draft.extraArgsText} onChange={(event) => setDraft((current) => ({ ...current, extraArgsText: event.target.value }))} className="w-full px-4 py-2 border border-slate-200 rounded-xl font-mono text-sm" />

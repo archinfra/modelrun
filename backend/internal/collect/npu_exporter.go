@@ -222,13 +222,14 @@ func buildNPUExporterInstallCommand(opts NPUExporterInstallOptions, endpoint str
 		if strings.TrimSpace(opts.Endpoint) == "" {
 			endpoint = fmt.Sprintf("http://127.0.0.1:%d/metrics", port)
 		}
-		command := "command -v docker >/dev/null 2>&1 && " +
-			"(docker rm -f modelrun-npu-exporter >/dev/null 2>&1 || true) && " +
-			"docker run -d --name modelrun-npu-exporter --restart unless-stopped --network host --privileged " +
-			"-v /dev:/dev " +
-			"-v /usr/local/Ascend:/usr/local/Ascend:ro " +
-			"-v /etc/localtime:/etc/localtime:ro " +
-			shellQuote(opts.Image)
+		command := withDockerPrivilegesCommand(
+			"(run_docker rm -f modelrun-npu-exporter >/dev/null 2>&1 || true) && " +
+				"run_docker run -d --name modelrun-npu-exporter --restart unless-stopped --network host --privileged " +
+				"-v /dev:/dev " +
+				"-v /usr/local/Ascend:/usr/local/Ascend:ro " +
+				"-v /etc/localtime:/etc/localtime:ro " +
+				shellQuote(opts.Image),
+		)
 		return command, endpoint, nil
 	default:
 		return "", endpoint, fmt.Errorf("unsupported npu exporter install mode %q", opts.Mode)
@@ -241,8 +242,15 @@ type prometheusSample struct {
 	value  float64
 }
 
+type exporterDeviceState struct {
+	info        domain.GPUInfo
+	hasHBMTotal bool
+	hasHBMUsed  bool
+	hasHBMFree  bool
+}
+
 func parseNPUExporterMetrics(out string) []domain.GPUInfo {
-	devices := map[int]*domain.GPUInfo{}
+	devices := map[int]*exporterDeviceState{}
 
 	for _, line := range strings.Split(out, "\n") {
 		sample, ok := parsePrometheusSample(line)
@@ -256,48 +264,83 @@ func parseNPUExporterMetrics(out string) []domain.GPUInfo {
 
 		device := devices[index]
 		if device == nil {
-			device = &domain.GPUInfo{Index: index, Type: "npu", Name: "Ascend NPU"}
+			device = &exporterDeviceState{
+				info: domain.GPUInfo{Index: index, Type: "npu", Name: "Ascend NPU"},
+			}
 			devices[index] = device
 		}
 		if name := firstNonEmpty(sample.labels["name"], sample.labels["modelName"]); name != "" {
-			device.Name = normalizeNPUName(name)
+			device.info.Name = normalizeNPUName(name)
 		}
 
 		switch sample.name {
 		case "npu_chip_info_name":
 			if sample.value > 0 {
 				if name := firstNonEmpty(sample.labels["name"], sample.labels["modelName"]); name != "" {
-					device.Name = normalizeNPUName(name)
+					device.info.Name = normalizeNPUName(name)
 				}
 			}
 		case "npu_chip_info_utilization", "npu_chip_info_overall_utilization":
-			device.Utilization = sample.value
+			device.info.Utilization = sample.value
 		case "npu_chip_info_temperature":
-			device.Temperature = sample.value
+			device.info.Temperature = sample.value
 		case "npu_chip_info_power":
-			device.PowerDraw = sample.value
-		case "npu_chip_info_hbm_total_memory", "npu_chip_info_total_memory":
-			device.MemoryTotal = int64(sample.value)
-		case "npu_chip_info_hbm_used_memory", "npu_chip_info_used_memory":
-			device.MemoryUsed = int64(sample.value)
+			device.info.PowerDraw = sample.value
+		case "npu_chip_info_hbm_total_memory":
+			device.info.MemoryTotal = normalizeAcceleratorMemory(sample.value)
+			device.hasHBMTotal = true
+		case "npu_chip_info_hbm_used_memory":
+			device.info.MemoryUsed = normalizeAcceleratorMemory(sample.value)
+			device.hasHBMUsed = true
+		case "npu_chip_info_hbm_free_memory":
+			device.info.MemoryFree = normalizeAcceleratorMemory(sample.value)
+			device.hasHBMFree = true
+		case "npu_chip_info_total_memory":
+			if !device.hasHBMTotal && (device.info.MemoryTotal == 0 || sample.value > 0) {
+				device.info.MemoryTotal = normalizeAcceleratorMemory(sample.value)
+			}
+		case "npu_chip_info_used_memory":
+			if !device.hasHBMUsed && (device.info.MemoryUsed == 0 || sample.value > 0) {
+				device.info.MemoryUsed = normalizeAcceleratorMemory(sample.value)
+			}
+		case "npu_chip_info_free_memory":
+			if !device.hasHBMFree && (device.info.MemoryFree == 0 || sample.value > 0) {
+				device.info.MemoryFree = normalizeAcceleratorMemory(sample.value)
+			}
 		case "npu_chip_info_health_status":
 			if sample.value == 1 {
-				device.Health = "OK"
+				device.info.Health = "OK"
 			} else {
-				device.Health = "UNHEALTHY"
+				device.info.Health = "UNHEALTHY"
 			}
 		}
 	}
 
 	result := make([]domain.GPUInfo, 0, len(devices))
 	for _, device := range devices {
-		if device.MemoryTotal > 0 {
-			device.MemoryFree = maxInt64(0, device.MemoryTotal-device.MemoryUsed)
+		if device.info.MemoryTotal > 0 && device.info.MemoryFree == 0 {
+			device.info.MemoryFree = maxInt64(0, device.info.MemoryTotal-device.info.MemoryUsed)
 		}
-		result = append(result, *device)
+		result = append(result, device.info)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Index < result[j].Index })
 	return result
+}
+
+func normalizeAcceleratorMemory(value float64) int64 {
+	const (
+		maxReasonableMiB = 1_000_000
+		minBytesValue    = 1 << 30
+	)
+
+	switch {
+	case value >= minBytesValue:
+		return int64(value / (1024 * 1024))
+	case value >= maxReasonableMiB:
+		return int64(value / 1024)
+	default:
+		return int64(value)
+	}
 }
 
 func parsePrometheusSample(line string) (prometheusSample, bool) {
@@ -403,4 +446,27 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func withDockerPrivilegesCommand(body string) string {
+	return strings.Join([]string{
+		"command -v docker >/dev/null 2>&1 || { echo 'docker is not installed' >&2; exit 127; };",
+		"run_docker(){",
+		"if [ \"$(id -u)\" -eq 0 ]; then",
+		"docker \"$@\";",
+		"return $?;",
+		"fi;",
+		"if command -v sudo >/dev/null 2>&1; then",
+		"sudo -n docker \"$@\";",
+		"status=$?;",
+		"if [ $status -ne 0 ]; then",
+		"echo 'docker command requires sudo privileges for the current SSH user, or the user must be added to the docker group.' >&2;",
+		"fi;",
+		"return $status;",
+		"fi;",
+		"echo 'docker command requires sudo privileges because the current SSH user is not root and sudo is unavailable.' >&2;",
+		"return 1;",
+		"};",
+		body,
+	}, " ")
 }
