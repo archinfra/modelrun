@@ -171,16 +171,25 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 
 		e.startStep(deployment.ID, server.ID, stepIndex)
 		e.addLog(deployment.ID, server.ID, step.step.ID, "info", "starting "+step.step.Name)
+		commandPreview := strings.TrimSpace(step.step.CommandPreview)
+		if commandPreview == "" {
+			commandPreview = strings.TrimSpace(step.command)
+		}
+		e.appendStepOutput(deployment.ID, server.ID, step.step.ID, []string{"$ " + commandPreview})
 
-		result, err := e.collector.RunCommand(server, jump, step.command)
+		_, err := e.collector.RunCommandStream(server, jump, step.command, func(item collect.CommandStreamLine) {
+			line := strings.TrimRight(item.Line, "\r")
+			if strings.TrimSpace(line) == "" {
+				return
+			}
+			e.appendStepOutput(deployment.ID, server.ID, step.step.ID, []string{line})
+		})
 		if err != nil {
 			e.addLog(deployment.ID, server.ID, step.step.ID, "error", err.Error())
-			e.recordCommandOutput(deployment.ID, server.ID, step.step.ID, result)
 			e.failStep(deployment.ID, server.ID, stepIndex, err)
 			return err
 		}
 
-		e.recordCommandOutput(deployment.ID, server.ID, step.step.ID, result)
 		e.completeStep(deployment.ID, server.ID, stepIndex)
 		e.addLog(deployment.ID, server.ID, step.step.ID, "info", "completed "+step.step.Name)
 	}
@@ -271,18 +280,19 @@ func (e *Executor) failStep(deploymentID, serverID string, stepIndex int, stepEr
 	})
 }
 
-func (e *Executor) recordCommandOutput(deploymentID, serverID, stepID string, result collect.CommandResult) {
-	lines := []string{}
-	if strings.TrimSpace(result.Command) != "" {
-		lines = append(lines, "$ "+strings.TrimSpace(result.Command))
-	}
-	if strings.TrimSpace(result.Stdout) != "" {
-		lines = append(lines, strings.Split(strings.TrimSpace(result.Stdout), "\n")...)
-	}
-	if strings.TrimSpace(result.Stderr) != "" {
-		lines = append(lines, strings.Split(strings.TrimSpace(result.Stderr), "\n")...)
-	}
+func (e *Executor) appendStepOutput(deploymentID, serverID, stepID string, lines []string) {
 	if len(lines) == 0 {
+		return
+	}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	if len(filtered) == 0 {
 		return
 	}
 
@@ -295,10 +305,20 @@ func (e *Executor) recordCommandOutput(deploymentID, serverID, stepID string, re
 			if data.Tasks[taskIdx].Steps[i].ID != stepID {
 				continue
 			}
-			data.Tasks[taskIdx].Steps[i].Logs = append(data.Tasks[taskIdx].Steps[i].Logs, lines...)
+			data.Tasks[taskIdx].Steps[i].Logs = append(data.Tasks[taskIdx].Steps[i].Logs, filtered...)
 			break
 		}
 		return nil
+	})
+
+	e.hub.Broadcast(realtime.Message{
+		Type:         "step_log",
+		DeploymentID: deploymentID,
+		Data: map[string]any{
+			"serverId": serverID,
+			"stepId":   stepID,
+			"lines":    filtered,
+		},
 	})
 }
 
@@ -319,6 +339,10 @@ func (e *Executor) addLog(deploymentID, serverID, stepID, level, message string)
 		}
 		return nil
 	})
+
+	if stepID != "" {
+		e.appendStepOutput(deploymentID, serverID, stepID, []string{message})
+	}
 
 	e.hub.Broadcast(realtime.Message{
 		Type:         "log",

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   CircleDashed,
@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { requestJSON } from '../lib/api';
 import { useAppStore } from '../store';
-import { DeploymentConfig, DeploymentTask, ModelConfig, PipelineTemplate, ServerConfig } from '../types';
+import { DeploymentConfig, DeploymentStep, DeploymentTask, ModelConfig, PipelineTemplate, ServerConfig } from '../types';
 
 type DraftServerOverride = {
   nodeIp: string;
@@ -188,6 +188,76 @@ const deploymentToDraft = (deployment: DeploymentConfig, models: ModelConfig[], 
   };
 };
 
+type DeploymentRealtimeMessage = {
+  type?: string;
+  deploymentId?: string;
+  data?: {
+    serverId?: string;
+    stepId?: string;
+    progress?: number;
+    status?: DeploymentStep['status'] | DeploymentConfig['status'];
+    overallProgress?: number;
+    endpoints?: DeploymentConfig['endpoints'];
+    lines?: string[];
+  };
+};
+
+const mergeDeploymentStatus = (
+  items: DeploymentConfig[],
+  deploymentId: string,
+  patch: { status?: DeploymentConfig['status']; endpoints?: DeploymentConfig['endpoints'] }
+) =>
+  items.map((deployment) =>
+    deployment.id === deploymentId
+      ? {
+          ...deployment,
+          status: patch.status || deployment.status,
+          endpoints: patch.endpoints || deployment.endpoints,
+        }
+      : deployment
+  );
+
+const mergeTaskProgress = (
+  items: DeploymentTask[],
+  serverId: string,
+  stepId: string,
+  patch: { progress?: number; status?: DeploymentStep['status']; overallProgress?: number }
+) =>
+  items.map((task) => {
+    if (task.serverId !== serverId) return task;
+    let changed = false;
+    const steps = task.steps.map((step) => {
+      if (step.id !== stepId) return step;
+      changed = true;
+      return {
+        ...step,
+        progress: typeof patch.progress === 'number' ? patch.progress : step.progress,
+        status: patch.status || step.status,
+      };
+    });
+    if (!changed) return task;
+    return {
+      ...task,
+      steps,
+      overallProgress: typeof patch.overallProgress === 'number' ? patch.overallProgress : task.overallProgress,
+    };
+  });
+
+const appendTaskStepLogs = (items: DeploymentTask[], serverId: string, stepId: string, lines: string[]) =>
+  items.map((task) => {
+    if (task.serverId !== serverId) return task;
+    let changed = false;
+    const steps = task.steps.map((step) => {
+      if (step.id !== stepId) return step;
+      changed = true;
+      return {
+        ...step,
+        logs: [...(step.logs || []), ...lines],
+      };
+    });
+    return changed ? { ...task, steps } : task;
+  });
+
 export const DeployWizard: React.FC = () => {
   const { currentProjectId, projects } = useAppStore();
   const [templates, setTemplates] = useState<PipelineTemplate[]>([]);
@@ -203,6 +273,7 @@ export const DeployWizard: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const logRefs = useRef<Record<string, HTMLPreElement | null>>({});
 
   const currentProject = projects.find((item) => item.id === currentProjectId);
   const selectedTemplate = useMemo(
@@ -267,12 +338,93 @@ export const DeployWizard: React.FC = () => {
       setTasks(taskItems || []);
     };
     void poll();
-    const timer = window.setInterval(() => void poll(), 3000);
+    const timer = window.setInterval(() => void poll(), 10000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
   }, [currentDeploymentId]);
+
+  useEffect(() => {
+    if (!currentDeploymentId) return;
+
+    let active = true;
+    let socket: WebSocket | null = null;
+    let retryTimer = 0;
+
+    const connect = () => {
+      if (!active) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+      socket.addEventListener('open', () => {
+        socket?.send(JSON.stringify({ type: 'subscribe', deploymentId: currentDeploymentId }));
+      });
+
+      socket.addEventListener('message', (event) => {
+        let message: DeploymentRealtimeMessage | null = null;
+        try {
+          message = JSON.parse(event.data) as DeploymentRealtimeMessage;
+        } catch {
+          return;
+        }
+        if (!message || message.deploymentId !== currentDeploymentId) return;
+        const data = message.data;
+
+        if (message.type === 'progress' && data?.serverId && data.stepId) {
+          setTasks((current) =>
+            mergeTaskProgress(current, data.serverId || '', data.stepId || '', {
+              progress: data.progress,
+              status: data.status as DeploymentStep['status'] | undefined,
+              overallProgress: data.overallProgress,
+            })
+          );
+          return;
+        }
+
+        if (message.type === 'step_log' && data?.serverId && data.stepId && data.lines?.length) {
+          setTasks((current) => appendTaskStepLogs(current, data.serverId || '', data.stepId || '', data.lines || []));
+          return;
+        }
+
+        if (message.type === 'status') {
+          setDeployments((current) =>
+            mergeDeploymentStatus(current, currentDeploymentId, {
+              status: data?.status as DeploymentConfig['status'] | undefined,
+              endpoints: data?.endpoints,
+            })
+          );
+        }
+      });
+
+      socket.addEventListener('close', () => {
+        if (!active) return;
+        retryTimer = window.setTimeout(connect, 1500);
+      });
+    };
+
+    connect();
+
+    return () => {
+      active = false;
+      window.clearTimeout(retryTimer);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'unsubscribe', deploymentId: currentDeploymentId }));
+      }
+      socket?.close();
+    };
+  }, [currentDeploymentId]);
+
+  useEffect(() => {
+    if (!expandedStepId) return;
+    const raf = window.requestAnimationFrame(() => {
+      Object.entries(logRefs.current).forEach(([key, node]) => {
+        if (!node || !key.startsWith(`${expandedStepId}:`)) return;
+        node.scrollTop = node.scrollHeight;
+      });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [expandedStepId, tasks]);
 
   const stepCards = useMemo(() => {
     return (selectedTemplate?.steps || []).map((templateStep) => {
@@ -722,7 +874,7 @@ export const DeployWizard: React.FC = () => {
                   {related.length > 0 ? related.map(({ serverId, step }) => <div key={`${templateStep.id}-${serverId}`} className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="font-medium text-slate-900">{visibleServers.find((item) => item.id === serverId)?.name || serverId}</div>
                     {step?.commandPreview && <pre className="mt-3 text-xs bg-slate-900 text-slate-100 rounded-xl p-3 overflow-x-auto whitespace-pre-wrap break-all">{step.commandPreview}</pre>}
-                    <pre className="mt-3 text-xs bg-slate-900 text-slate-100 rounded-xl p-3 overflow-x-auto whitespace-pre-wrap break-all max-h-64">{step?.logs?.join('\n') || '当前还没有日志。'}</pre>
+                    <pre ref={(node) => { logRefs.current[`${templateStep.id}:${serverId}`] = node; }} className="mt-3 text-xs bg-slate-900 text-slate-100 rounded-xl p-3 overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all max-h-64">{step?.logs?.join('\n') || '当前还没有日志。'}</pre>
                   </div>) : <div className="text-sm text-slate-500">选择一个部署并启动后，这里会展示每台服务器的执行命令和日志。</div>}
                 </div>}
               </div>)}

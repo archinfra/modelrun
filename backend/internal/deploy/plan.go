@@ -16,6 +16,8 @@ type plannedStep struct {
 	command string
 }
 
+const modelscopeRuntimeImage = "registry.cn-beijing.aliyuncs.com/ainfracn/modelscope:1.35.0"
+
 func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, servers []domain.ServerConfig) ([]plannedStep, error) {
 	template, ok := LookupTemplate(deployment.Framework)
 	if !ok {
@@ -28,7 +30,7 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 	workDir := deploymentWorkDir(runtime, deployment)
 	cacheDir := deploymentCacheDir(runtime, deployment)
 
-	prepareCommand, err := buildPrepareModelCommand(deployment, workDir, modelHostPath)
+	modelSteps, err := buildModelPreparationSteps(deployment, runtime, modelHostPath)
 	if err != nil {
 		return nil, err
 	}
@@ -38,30 +40,19 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 		return nil, err
 	}
 
-	steps := []plannedStep{
-		{
-			step: domain.DeploymentStep{
-				ID:             "prepare_model",
-				Name:           "准备模型",
-				Description:    "下载模型到托管目录，或校验目标服务器上的本地模型目录。",
-				CommandPreview: prepareCommand,
-				Status:         "pending",
-				Logs:           []string{},
-			},
-			command: prepareCommand,
-		},
-		{
+	steps := append(modelSteps,
+		plannedStep{
 			step: domain.DeploymentStep{
 				ID:             "pull_image",
 				Name:           "拉取镜像",
 				Description:    "在目标服务器上拉取当前配置的运行时镜像。",
-				CommandPreview: withDockerPrivileges("run_docker pull " + shellQuote(imageRef)),
+				CommandPreview: "docker pull " + shellQuote(imageRef),
 				Status:         "pending",
 				Logs:           []string{},
 			},
 			command: withDockerPrivileges("run_docker pull " + shellQuote(imageRef)),
 		},
-		{
+		plannedStep{
 			step: domain.DeploymentStep{
 				ID:             "launch_runtime",
 				Name:           "启动服务",
@@ -73,7 +64,7 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 			},
 			command: launchCommand,
 		},
-		{
+		plannedStep{
 			step: domain.DeploymentStep{
 				ID:             "verify_service",
 				Name:           "验证服务",
@@ -85,7 +76,7 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 			},
 			command: buildVerifyCommand(deployment, runtime, server, servers),
 		},
-	}
+	)
 
 	if template.SupportsRay {
 		for i := range steps {
@@ -213,52 +204,239 @@ func deploymentCacheDir(runtime domain.DeploymentRuntimeConfig, deployment domai
 }
 
 func buildPrepareModelCommand(deployment domain.DeploymentConfig, workDir, modelHostPath string) (string, error) {
-	commands := []string{"set -e", "mkdir -p " + shellQuote(workDir)}
-	privilegedPaths := []string{workDir}
+	steps, err := buildModelPreparationSteps(deployment, domain.DeploymentRuntimeConfig{WorkDir: workDir, ModelDir: path.Dir(modelHostPath)}, modelHostPath)
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, len(steps))
+	for _, step := range steps {
+		parts = append(parts, step.command)
+	}
+	return strings.Join(parts, " && "), nil
+}
 
+func buildModelPreparationSteps(deployment domain.DeploymentConfig, runtime domain.DeploymentRuntimeConfig, modelHostPath string) ([]plannedStep, error) {
+	checkCommand, err := buildCheckModelTargetCommand(deployment, modelHostPath)
+	if err != nil {
+		return nil, err
+	}
+	fetcherCommand, err := buildPrepareModelFetcherCommand(deployment)
+	if err != nil {
+		return nil, err
+	}
+	syncCommand, err := buildSyncModelCommand(deployment, runtime, modelHostPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return []plannedStep{
+		{
+			step: domain.DeploymentStep{
+				ID:             "check_model_target",
+				Name:           "检查模型目录",
+				Description:    "检查模型目录或本地模型路径，确认当前部署会使用哪个目标位置。",
+				CommandPreview: buildCheckModelTargetPreview(deployment, modelHostPath),
+				Status:         "pending",
+				Logs:           []string{},
+			},
+			command: checkCommand,
+		},
+		{
+			step: domain.DeploymentStep{
+				ID:             "prepare_model_fetcher",
+				Name:           "准备模型下载器",
+				Description:    "按模型来源准备下载工具；ModelScope 缺失时会自动切换到容器化 modelscope 命令。",
+				CommandPreview: buildPrepareModelFetcherPreview(deployment),
+				Status:         "pending",
+				Logs:           []string{},
+			},
+			command: fetcherCommand,
+		},
+		{
+			step: domain.DeploymentStep{
+				ID:             "sync_model",
+				Name:           "同步模型",
+				Description:    "模型已存在则直接复用，不存在时再执行下载或校验动作。",
+				CommandPreview: buildSyncModelPreview(deployment, modelHostPath),
+				Status:         "pending",
+				Logs:           []string{},
+			},
+			command: syncCommand,
+		},
+	}, nil
+}
+
+func buildCheckModelTargetPreview(deployment domain.DeploymentConfig, modelHostPath string) string {
 	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
 	case "", "local":
 		target := strings.TrimSpace(deployment.Model.LocalPath)
 		if target == "" {
 			target = modelHostPath
 		}
-		commands = append(commands,
-			"test -e "+shellQuote(target)+" || { echo 'model path not found: "+escapeForSingleQuotedMessage(target)+"' >&2; exit 1; }",
-			"echo 'using local model path "+escapeForSingleQuotedMessage(target)+"'",
-		)
+		return "test -e " + shellQuote(target)
+	default:
+		return "ls -A " + shellQuote(modelHostPath)
+	}
+}
+
+func buildPrepareModelFetcherPreview(deployment domain.DeploymentConfig) string {
+	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
+	case "", "local":
+		return "echo 'local model source does not require downloader'"
+	case "modelscope":
+		return strings.Join([]string{
+			"command -v modelscope >/dev/null 2>&1",
+			"|| docker pull " + shellQuote(modelscopeRuntimeImage),
+		}, " ")
+	case "huggingface":
+		return "command -v huggingface-cli >/dev/null 2>&1"
+	default:
+		return ""
+	}
+}
+
+func buildSyncModelPreview(deployment domain.DeploymentConfig, modelHostPath string) string {
+	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
+	case "", "local":
+		target := strings.TrimSpace(deployment.Model.LocalPath)
+		if target == "" {
+			target = modelHostPath
+		}
+		return "ls -A " + shellQuote(target)
+	case "modelscope":
+		return buildModelScopeDownloadPreview(deployment, modelHostPath)
+	case "huggingface":
+		revisionArg := optionalRevisionArg(deployment.Model.Revision)
+		return "huggingface-cli download " + shellQuote(deployment.Model.ModelID) + revisionArg + " --local-dir " + shellQuote(modelHostPath)
+	default:
+		return ""
+	}
+}
+
+func buildModelScopeDownloadPreview(deployment domain.DeploymentConfig, modelHostPath string) string {
+	revisionArg := optionalRevisionArg(deployment.Model.Revision)
+	parentDir := path.Dir(modelHostPath)
+	containerModelRoot := "/modelrun/models"
+	containerTarget := path.Join(containerModelRoot, path.Base(modelHostPath))
+	return strings.Join([]string{
+		"modelscope download --model " + shellQuote(deployment.Model.ModelID) + revisionArg + " --local_dir " + shellQuote(modelHostPath),
+		"or",
+		"docker run --rm -v " + shellQuote(parentDir+":"+containerModelRoot) + " " + shellQuote(modelscopeRuntimeImage) +
+			" download --model " + shellQuote(deployment.Model.ModelID) + revisionArg + " --local_dir " + shellQuote(containerTarget),
+	}, "\n")
+}
+
+func buildCheckModelTargetCommand(deployment domain.DeploymentConfig, modelHostPath string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
+	case "", "local":
+		target := strings.TrimSpace(deployment.Model.LocalPath)
+		if target == "" {
+			target = modelHostPath
+		}
+		return strings.Join([]string{
+			"test -e " + shellQuote(target) + " || { echo 'model path not found: " + escapeForSingleQuotedMessage(target) + "' >&2; exit 1; }",
+			"echo 'using local model path " + escapeForSingleQuotedMessage(target) + "'",
+		}, " && "), nil
+	case "modelscope", "huggingface":
+		return strings.Join([]string{
+			"if [ -d " + shellQuote(modelHostPath) + " ] && [ \"$(ls -A " + shellQuote(modelHostPath) + " 2>/dev/null)\" ]; then",
+			"echo 'model files already exist in " + escapeForSingleQuotedMessage(modelHostPath) + "';",
+			"else",
+			"echo 'model files will be stored in " + escapeForSingleQuotedMessage(modelHostPath) + "';",
+			"fi",
+		}, " "), nil
+	default:
+		return "", fmt.Errorf("unsupported model source %q", deployment.Model.Source)
+	}
+}
+
+func buildPrepareModelFetcherCommand(deployment domain.DeploymentConfig) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
+	case "", "local":
+		return "echo 'local model source does not require remote downloader'", nil
+	case "modelscope":
+		return strings.Join([]string{
+			"if command -v modelscope >/dev/null 2>&1; then",
+			"echo 'using local modelscope';",
+			"else",
+			withDockerPrivileges("run_docker pull "+shellQuote(modelscopeRuntimeImage)) + ";",
+			"fi",
+		}, " "), nil
+	case "huggingface":
+		return strings.Join([]string{
+			"export PATH=\"$PATH:$HOME/.local/bin\"",
+			"command -v huggingface-cli >/dev/null 2>&1 || { command -v python3 >/dev/null 2>&1 || { echo 'python3 is required to install huggingface-cli' >&2; exit 127; }; python3 -m pip install --user 'huggingface_hub[cli]'; }",
+			"echo 'huggingface-cli is ready'",
+		}, " && "), nil
+	default:
+		return "", fmt.Errorf("unsupported model source %q", deployment.Model.Source)
+	}
+}
+
+func buildSyncModelCommand(deployment domain.DeploymentConfig, runtime domain.DeploymentRuntimeConfig, modelHostPath string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(deployment.Model.Source)) {
+	case "", "local":
+		target := strings.TrimSpace(deployment.Model.LocalPath)
+		if target == "" {
+			target = modelHostPath
+		}
+		return "echo 'local model path is ready: " + escapeForSingleQuotedMessage(target) + "'", nil
 	case "modelscope":
 		if strings.TrimSpace(deployment.Model.ModelID) == "" {
 			return "", fmt.Errorf("modelId is required for modelscope source")
 		}
-		privilegedPaths = append(privilegedPaths, modelHostPath)
-		revisionArg := optionalRevisionArg(deployment.Model.Revision)
-		commands = append(commands,
-			"mkdir -p "+shellQuote(modelHostPath),
-			"export PATH=\"$PATH:$HOME/.local/bin\"",
-			"command -v modelscope >/dev/null 2>&1 || { command -v python3 >/dev/null 2>&1 || { echo 'python3 is required to install modelscope' >&2; exit 127; }; python3 -m pip install --user modelscope; }",
-			"modelscope download --model "+shellQuote(deployment.Model.ModelID)+revisionArg+" --local_dir "+shellQuote(modelHostPath),
-		)
+		body := strings.Join([]string{
+			"if [ -d " + shellQuote(modelHostPath) + " ] && [ \"$(ls -A " + shellQuote(modelHostPath) + " 2>/dev/null)\" ]; then",
+			"echo 'reuse existing model files in " + escapeForSingleQuotedMessage(modelHostPath) + "';",
+			"else",
+			"mkdir -p " + shellQuote(modelHostPath) + ";",
+			buildModelScopeDownloadInvoker(deployment, runtime, modelHostPath) + ";",
+			"fi",
+		}, " ")
+		return withPathPrivileges(
+			body,
+			[]string{modelHostPath},
+			"model preparation requires write access to the managed runtime directories. Configure a writable runtime path or allow passwordless sudo for the SSH user.",
+		), nil
 	case "huggingface":
 		if strings.TrimSpace(deployment.Model.ModelID) == "" {
 			return "", fmt.Errorf("modelId is required for huggingface source")
 		}
-		privilegedPaths = append(privilegedPaths, modelHostPath)
 		revisionArg := optionalRevisionArg(deployment.Model.Revision)
-		commands = append(commands,
-			"mkdir -p "+shellQuote(modelHostPath),
-			"export PATH=\"$PATH:$HOME/.local/bin\"",
-			"command -v huggingface-cli >/dev/null 2>&1 || { command -v python3 >/dev/null 2>&1 || { echo 'python3 is required to install huggingface-cli' >&2; exit 127; }; python3 -m pip install --user 'huggingface_hub[cli]'; }",
-			"huggingface-cli download "+shellQuote(deployment.Model.ModelID)+revisionArg+" --local-dir "+shellQuote(modelHostPath),
-		)
+		body := strings.Join([]string{
+			"if [ -d " + shellQuote(modelHostPath) + " ] && [ \"$(ls -A " + shellQuote(modelHostPath) + " 2>/dev/null)\" ]; then",
+			"echo 'reuse existing model files in " + escapeForSingleQuotedMessage(modelHostPath) + "';",
+			"else",
+			"mkdir -p " + shellQuote(modelHostPath) + " && export PATH=\"$PATH:$HOME/.local/bin\" && huggingface-cli download " + shellQuote(deployment.Model.ModelID) + revisionArg + " --local-dir " + shellQuote(modelHostPath) + ";",
+			"fi",
+		}, " ")
+		return withPathPrivileges(
+			body,
+			[]string{modelHostPath},
+			"model preparation requires write access to the managed runtime directories. Configure a writable runtime path or allow passwordless sudo for the SSH user.",
+		), nil
 	default:
 		return "", fmt.Errorf("unsupported model source %q", deployment.Model.Source)
 	}
+}
 
-	return withPathPrivileges(
-		strings.Join(commands, " && "),
-		privilegedPaths,
-		"model preparation requires write access to the managed runtime directories. Configure a writable runtime path or allow passwordless sudo for the SSH user.",
-	), nil
+func buildModelScopeDownloadInvoker(deployment domain.DeploymentConfig, runtime domain.DeploymentRuntimeConfig, modelHostPath string) string {
+	revisionArg := optionalRevisionArg(deployment.Model.Revision)
+	parentDir := path.Dir(modelHostPath)
+	containerModelRoot := "/modelrun/models"
+	containerTarget := path.Join(containerModelRoot, path.Base(modelHostPath))
+	localCommand := "export PATH=\"$PATH:$HOME/.local/bin\" && modelscope download --model " + shellQuote(deployment.Model.ModelID) + revisionArg + " --local_dir " + shellQuote(modelHostPath)
+	dockerCommand := withDockerPrivileges(
+		"run_docker run --rm -v " + shellQuote(parentDir+":"+containerModelRoot) + " " + shellQuote(modelscopeRuntimeImage) +
+			" download --model " + shellQuote(deployment.Model.ModelID) + revisionArg + " --local_dir " + shellQuote(containerTarget),
+	)
+	return strings.Join([]string{
+		"if command -v modelscope >/dev/null 2>&1; then",
+		localCommand + ";",
+		"else",
+		dockerCommand + ";",
+		"fi",
+	}, " ")
 }
 
 func buildLaunchRuntimeCommand(template domain.PipelineTemplate, deployment domain.DeploymentConfig, docker domain.DockerConfig, runtime domain.DeploymentRuntimeConfig, server domain.ServerConfig, servers []domain.ServerConfig, modelHostPath, workDir, cacheDir string) (string, error) {
