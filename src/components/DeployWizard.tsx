@@ -625,7 +625,7 @@ export const DeployWizard: React.FC = () => {
     }
   };
 
-  const buildRayPreview = (server: ServerConfig) => {
+  const buildLegacyRayPreview = (server: ServerConfig) => {
     if (!draft.rayEnabled) return '未启用 Ray，当前部署会直接在单机容器内执行推理服务。';
     const override = draft.serverOverrides[server.id] || makeOverride(server);
     const head = selectedServers.find((item) => item.id === draft.rayHeadServerId) || selectedServers[0];
@@ -645,6 +645,82 @@ export const DeployWizard: React.FC = () => {
       `ray start --address ${headNodeIp}:${draft.rayPort || 6379} --node-ip-address ${nodeIp}${extraArgs ? ` ${extraArgs}` : ''}`,
       '当前节点只加入集群并常驻，不会重复执行 vllm serve。',
     ].join('\n');
+  };
+
+  const quotePreviewValue = (value: string) => {
+    if (!/[\s"'\\]/.test(value)) return value;
+    return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+  };
+
+  const formatRayScriptPreview = (segments: string[]) => {
+    const clean = segments.map((item) => item.trim()).filter(Boolean);
+    if (!clean.length) return './ray.sh';
+    return clean
+      .map((item, index) => (index === 0 ? `./ray.sh ${item}${clean.length > 1 ? ' \\' : ''}` : `  ${item}${index === clean.length - 1 ? '' : ' \\'}`))
+      .join('\n');
+  };
+
+  const buildRayPreview = (server: ServerConfig) => {
+    const override = draft.serverOverrides[server.id] || makeOverride(server);
+    const head = selectedServers.find((item) => item.id === draft.rayHeadServerId) || selectedServers[0];
+    const headOverride = draft.serverOverrides[head?.id || ''];
+    const nodeIp = override.nodeIp.trim() || server.host || '127.0.0.1';
+    const headNodeIp = headOverride?.nodeIp?.trim() || head?.host || '127.0.0.1';
+    const role = head?.id === server.id ? 'head' : 'worker';
+    const modelId = (modelIdentity || draft.name || 'model-id').trim();
+    const visibleDevices = (override.visibleDevices || draft.rayVisibleDevices || '').trim();
+    const extraRayArgs = override.rayStartArgsText.split('\n').map((item) => item.trim()).filter(Boolean);
+    const extraVllmArgs = draft.extraArgsText.split('\n').map((item) => item.trim()).filter(Boolean);
+    const segments = [
+      'start',
+      `-m ${quotePreviewValue(modelId)}`,
+      `--distributed-executor-backend ${draft.rayEnabled ? 'ray' : 'mp'}`,
+    ];
+
+    if (draft.rayEnabled) {
+      segments.push(
+        `--node-role ${role}`,
+        `--num-nodes ${Math.max(1, selectedServers.length)}`,
+        `--head-ip ${quotePreviewValue(headNodeIp)}`,
+        `--node-ip ${quotePreviewValue(nodeIp)}`
+      );
+      if (draft.rayNICName.trim()) {
+        segments.push(`--nic-name ${quotePreviewValue(draft.rayNICName.trim())}`);
+      }
+    }
+
+    if (visibleDevices) {
+      segments.push(`--cards ${quotePreviewValue(visibleDevices)}`);
+    }
+
+    segments.push(`--tp ${Math.max(1, draft.tensorParallelSize || 1)}`, `--pp ${Math.max(1, draft.pipelineParallelSize || 1)}`);
+
+    if (draft.maxModelLen > 0) {
+      segments.push(`--max-model-len ${draft.maxModelLen}`);
+    }
+    if (draft.dtype.trim() && draft.dtype.trim() !== 'auto') {
+      segments.push(`--dtype ${quotePreviewValue(draft.dtype.trim())}`);
+    }
+    if (draft.gpuMemoryUtilization > 0) {
+      segments.push(`--gpu-memory-utilization ${draft.gpuMemoryUtilization}`);
+    }
+    if (extraVllmArgs.length) {
+      segments.push(`--vllm-args ${quotePreviewValue(extraVllmArgs.join(' '))}`);
+    }
+
+    const lines = ['兼容启动命令', formatRayScriptPreview(segments)];
+    if (extraRayArgs.length) {
+      lines.push('', ...extraRayArgs.map((item) => `# 节点附加 Ray 参数: ${item}`));
+    }
+    lines.push(
+      '',
+      draft.rayEnabled
+        ? role === 'head'
+          ? '# Head 节点负责建立 Ray 集群并对外承载 vLLM API'
+          : '# Worker 节点只加入集群并常驻，不会重复执行 vLLM serve'
+        : '# 单机模式下会在容器内直接启动推理服务'
+    );
+    return lines.join('\n');
   };
 
   const saveDeployment = async (startNow: boolean) => {

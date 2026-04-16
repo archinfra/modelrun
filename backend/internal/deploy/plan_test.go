@@ -183,6 +183,68 @@ func TestBuildVerifyCommandUsesRayStatusForWorkerNode(t *testing.T) {
 	}
 }
 
+func TestBuildVLLMRayCompatiblePreviewUsesRayScriptStyle(t *testing.T) {
+	deployment := domain.DeploymentConfig{
+		ID:        "deployment_test",
+		Name:      "demo",
+		Framework: "vllm-ascend",
+		Model: domain.ModelConfig{
+			Source:  "modelscope",
+			ModelID: "Qwen/Qwen3.5-397B-A17B",
+		},
+		Ray: domain.DeploymentRayConfig{
+			Enabled:      true,
+			HeadServerID: "server-head",
+			NICName:      "bond1.117",
+		},
+		VLLM: domain.VLLMParams{
+			TensorParallelSize:   8,
+			PipelineParallelSize: 2,
+			MaxModelLen:          32768,
+		},
+		Runtime: domain.DeploymentRuntimeConfig{
+			ExtraArgs: []string{"--trust-remote-code", "--max-num-seqs", "256"},
+		},
+		ServerOverrides: []domain.DeploymentServerOverride{
+			{ServerID: "server-head", NodeIP: "172.20.14.20", VisibleDevices: "0,1,2,3,4,5,6,7"},
+			{ServerID: "server-worker", NodeIP: "172.20.14.21", VisibleDevices: "0,1,2,3,4,5,6,7", RayStartArgs: []string{"--resources", "{\"worker\": 1}"}},
+		},
+	}
+	servers := []domain.ServerConfig{
+		{ID: "server-head", Host: "172.20.14.20"},
+		{ID: "server-worker", Host: "172.20.14.21"},
+	}
+
+	headPreview := buildVLLMRayCompatiblePreview(deployment, servers[0], servers)
+	for _, needle := range []string{
+		"./ray.sh start \\",
+		"--node-role head \\",
+		"--head-ip 172.20.14.20 \\",
+		"--node-ip 172.20.14.20 \\",
+		"--nic-name bond1.117 \\",
+		"--cards 0,1,2,3,4,5,6,7 \\",
+		"--tp 8 \\",
+		"--pp 2 \\",
+		"--vllm-args '--trust-remote-code --max-num-seqs 256'",
+	} {
+		if !strings.Contains(headPreview, needle) {
+			t.Fatalf("expected head preview to contain %q, got %q", needle, headPreview)
+		}
+	}
+
+	workerPreview := buildVLLMRayCompatiblePreview(deployment, servers[1], servers)
+	for _, needle := range []string{
+		"--node-role worker \\",
+		"--head-ip 172.20.14.20 \\",
+		"--node-ip 172.20.14.21 \\",
+		"# 节点附加 Ray 参数: --resources {\"worker\": 1}",
+	} {
+		if !strings.Contains(workerPreview, needle) {
+			t.Fatalf("expected worker preview to contain %q, got %q", needle, workerPreview)
+		}
+	}
+}
+
 func TestBuildVerifyCommandUsesContainerDiagnosticsForHTTPChecks(t *testing.T) {
 	deployment := domain.DeploymentConfig{
 		ID:        "deployment_test",

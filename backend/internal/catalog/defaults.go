@@ -307,9 +307,9 @@ func defaultPipelineStepMetadata(framework string) []domain.PipelineTemplateStep
 	case "vllm-ascend":
 		launchDescription = "Generate launch assets, initialize Ray when enabled, and start the vLLM runtime in Docker."
 		launchDetails = []string{
-			"Ray head and worker nodes use different startup commands automatically.",
-			"Worker nodes only join the Ray cluster and keep the container alive for distributed execution.",
-			"Container restart continues to use the same launch script and runtime arguments.",
+			"内置模板会展示与 ./ray.sh start 兼容的 head / worker 启动命令，便于核对参数。",
+			"Ray head 和 worker 会自动区分角色；worker 只加入集群并常驻，不重复执行 vLLM serve。",
+			"容器重启后会继续沿用同一套启动脚本和参数，行为和手工脚本保持一致。",
 		}
 		verifyDescription = "Probe the OpenAI compatible API on the head node, or run ray status checks on worker nodes."
 	case "mindie":
