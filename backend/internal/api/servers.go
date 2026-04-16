@@ -23,7 +23,7 @@ func (a *API) handleServers(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		writeJSON(w, http.StatusOK, servers)
+		writeJSON(w, http.StatusOK, a.state.OverlayServers(servers))
 	case http.MethodPost:
 		var server domain.ServerConfig
 		if err := readJSON(r, &server); err != nil {
@@ -126,7 +126,7 @@ func (a *API) handleServerItem(w http.ResponseWriter, r *http.Request, id string
 			writeError(w, http.StatusNotFound, store.ErrNotFound)
 			return
 		}
-		writeJSON(w, http.StatusOK, data.Servers[idx])
+		writeJSON(w, http.StatusOK, a.state.OverlayServer(data.Servers[idx]))
 	case http.MethodPut, http.MethodPatch:
 		var patch map[string]json.RawMessage
 		if err := readJSON(r, &patch); err != nil {
@@ -154,6 +154,7 @@ func (a *API) handleServerItem(w http.ResponseWriter, r *http.Request, id string
 			writeStoreError(w, err)
 			return
 		}
+		a.state.SetServerRuntime(id, server)
 
 		writeJSON(w, http.StatusOK, server)
 	case http.MethodDelete:
@@ -177,6 +178,7 @@ func (a *API) handleServerItem(w http.ResponseWriter, r *http.Request, id string
 			writeStoreError(w, err)
 			return
 		}
+		a.state.DeleteServerRuntime(id)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(w)
@@ -208,36 +210,26 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 		exporterStatus = &status
 	}
 
-	if err := a.store.Update(func(data *domain.Data) error {
-		idx := findServer(data.Servers, id)
-		if idx < 0 {
-			return store.ErrNotFound
-		}
-		if success {
-			data.Servers[idx].Status = "online"
-			data.Servers[idx].GPUInfo = snapshot.Accelerators
-			data.Servers[idx].DriverVersion = snapshot.DriverVersion
-			data.Servers[idx].CUDAVersion = snapshot.CUDAVersion
-			data.Servers[idx].DockerVersion = snapshot.DockerVersion
-			if exporterStatus != nil {
-				data.Servers[idx].NPUExporterEndpoint = exporterStatus.Endpoint
-				if exporterStatus.Reachable {
-					data.Servers[idx].NPUExporterStatus = "online"
-				} else {
-					data.Servers[idx].NPUExporterStatus = "offline"
-				}
-				data.Servers[idx].NPUExporterLastCheck = domain.Now()
+	if success {
+		server.Status = "online"
+		server.GPUInfo = snapshot.Accelerators
+		server.DriverVersion = snapshot.DriverVersion
+		server.CUDAVersion = snapshot.CUDAVersion
+		server.DockerVersion = snapshot.DockerVersion
+		if exporterStatus != nil {
+			server.NPUExporterEndpoint = exporterStatus.Endpoint
+			if exporterStatus.Reachable {
+				server.NPUExporterStatus = "online"
+			} else {
+				server.NPUExporterStatus = "offline"
 			}
-			server = data.Servers[idx]
-		} else {
-			data.Servers[idx].Status = "offline"
+			server.NPUExporterLastCheck = domain.Now()
 		}
-		data.Servers[idx].LastCheck = domain.Now()
-		return nil
-	}); err != nil {
-		writeStoreError(w, err)
-		return
+	} else {
+		server.Status = "offline"
 	}
+	server.LastCheck = domain.Now()
+	a.state.SetServerRuntime(id, server)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":       success,
@@ -291,18 +283,10 @@ func (a *API) handleServerGPU(w http.ResponseWriter, id string) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	if err := a.store.Update(func(data *domain.Data) error {
-		idx := findServer(data.Servers, id)
-		if idx < 0 {
-			return store.ErrNotFound
-		}
-		data.Servers[idx].GPUInfo = gpus
-		data.Servers[idx].LastCheck = domain.Now()
-		return nil
-	}); err != nil {
-		writeStoreError(w, err)
-		return
-	}
+	server := data.Servers[idx]
+	server.GPUInfo = gpus
+	server.LastCheck = domain.Now()
+	a.state.SetServerRuntime(id, server)
 
 	writeJSON(w, http.StatusOK, gpus)
 }
@@ -327,23 +311,14 @@ func (a *API) handleServerNPUExporterStatus(w http.ResponseWriter, id string) {
 		return
 	}
 
-	if err := a.store.Update(func(data *domain.Data) error {
-		idx := findServer(data.Servers, id)
-		if idx < 0 {
-			return store.ErrNotFound
-		}
-		data.Servers[idx].NPUExporterEndpoint = status.Endpoint
-		if status.Reachable {
-			data.Servers[idx].NPUExporterStatus = "online"
-		} else {
-			data.Servers[idx].NPUExporterStatus = "offline"
-		}
-		data.Servers[idx].NPUExporterLastCheck = domain.Now()
-		return nil
-	}); err != nil {
-		writeStoreError(w, err)
-		return
+	server.NPUExporterEndpoint = status.Endpoint
+	if status.Reachable {
+		server.NPUExporterStatus = "online"
+	} else {
+		server.NPUExporterStatus = "offline"
 	}
+	server.NPUExporterLastCheck = domain.Now()
+	a.state.SetServerRuntime(id, server)
 
 	writeJSON(w, http.StatusOK, status)
 }
@@ -374,23 +349,14 @@ func (a *API) handleServerNPUExporterInstall(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := a.store.Update(func(data *domain.Data) error {
-		idx := findServer(data.Servers, id)
-		if idx < 0 {
-			return store.ErrNotFound
-		}
-		data.Servers[idx].NPUExporterEndpoint = result.Endpoint
-		if result.Status.Reachable {
-			data.Servers[idx].NPUExporterStatus = "online"
-		} else {
-			data.Servers[idx].NPUExporterStatus = "offline"
-		}
-		data.Servers[idx].NPUExporterLastCheck = domain.Now()
-		return nil
-	}); err != nil {
-		writeStoreError(w, err)
-		return
+	server.NPUExporterEndpoint = result.Endpoint
+	if result.Status.Reachable {
+		server.NPUExporterStatus = "online"
+	} else {
+		server.NPUExporterStatus = "offline"
 	}
+	server.NPUExporterLastCheck = domain.Now()
+	a.state.SetServerRuntime(id, server)
 
 	writeJSON(w, http.StatusOK, result)
 }

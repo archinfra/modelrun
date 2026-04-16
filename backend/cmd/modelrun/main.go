@@ -9,6 +9,7 @@ import (
 	"modelrun/backend/internal/config"
 	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/realtime"
+	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
 )
 
@@ -21,8 +22,9 @@ func main() {
 	}
 
 	hub := realtime.NewHub()
-	executor := deploy.NewExecutor(st, hub)
-	handler := api.New(st, executor, hub, cfg.StaticDir)
+	state := runstate.New()
+	executor := deploy.NewExecutor(st, state, hub)
+	handler := api.New(st, state, executor, hub, cfg.StaticDir)
 
 	server := &http.Server{
 		Addr:              cfg.Addr,

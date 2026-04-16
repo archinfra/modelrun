@@ -10,11 +10,13 @@ import (
 	"modelrun/backend/internal/catalog"
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
+	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
 )
 
 type Executor struct {
 	store     *store.Store
+	state     *runstate.State
 	collector *collect.Collector
 }
 
@@ -32,8 +34,8 @@ type CreateTaskRequest struct {
 	ServerIDs     []string          `json:"serverIds"`
 }
 
-func New(st *store.Store, collector *collect.Collector) *Executor {
-	return &Executor{store: st, collector: collector}
+func New(st *store.Store, state *runstate.State, collector *collect.Collector) *Executor {
+	return &Executor{store: st, state: state, collector: collector}
 }
 
 func (e *Executor) Presets() []domain.RemoteTaskPreset {
@@ -90,12 +92,7 @@ func (e *Executor) Create(req CreateTaskRequest) (domain.RemoteTask, error) {
 		})
 	}
 
-	if err := e.store.Update(func(data *domain.Data) error {
-		data.RemoteTasks = append(data.RemoteTasks, task)
-		return nil
-	}); err != nil {
-		return domain.RemoteTask{}, err
-	}
+	e.state.PutRemoteTask(task)
 
 	go e.run(task.ID)
 
@@ -105,11 +102,11 @@ func (e *Executor) Create(req CreateTaskRequest) (domain.RemoteTask, error) {
 func (e *Executor) run(taskID string) {
 	e.markTaskRunning(taskID)
 
-	snapshot := e.store.Snapshot()
-	task, ok := findTask(snapshot.RemoteTasks, taskID)
+	task, ok := e.state.RemoteTask(taskID)
 	if !ok {
 		return
 	}
+	snapshot := e.store.Snapshot()
 
 	var wg sync.WaitGroup
 	for _, run := range task.Runs {
@@ -132,19 +129,18 @@ func (e *Executor) run(taskID string) {
 
 func (e *Executor) executeRun(taskID string, server domain.ServerConfig) {
 	startedAt := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx, runIdx := findTaskRun(data.RemoteTasks, taskID, server.ID)
-		if taskIdx < 0 || runIdx < 0 {
-			return nil
+	e.state.UpdateRemoteTask(taskID, func(task *domain.RemoteTask) {
+		runIdx := findRemoteTaskRun(task.Runs, server.ID)
+		if runIdx < 0 {
+			return
 		}
-		data.RemoteTasks[taskIdx].Runs[runIdx].Status = "running"
-		data.RemoteTasks[taskIdx].Runs[runIdx].StartedAt = startedAt
-		data.RemoteTasks[taskIdx].Runs[runIdx].Command = data.RemoteTasks[taskIdx].CommandPreview
-		if data.RemoteTasks[taskIdx].StartedAt == "" {
-			data.RemoteTasks[taskIdx].StartedAt = startedAt
+		task.Runs[runIdx].Status = "running"
+		task.Runs[runIdx].StartedAt = startedAt
+		task.Runs[runIdx].Command = task.CommandPreview
+		if task.StartedAt == "" {
+			task.StartedAt = startedAt
 		}
-		data.RemoteTasks[taskIdx].Status = "running"
-		return nil
+		task.Status = "running"
 	})
 
 	snapshot := e.store.Snapshot()
@@ -152,7 +148,7 @@ func (e *Executor) executeRun(taskID string, server domain.ServerConfig) {
 	if ok {
 		server = latestServer
 	}
-	task, ok := findTask(snapshot.RemoteTasks, taskID)
+	task, ok := e.state.RemoteTask(taskID)
 	if !ok {
 		return
 	}
@@ -169,28 +165,22 @@ func (e *Executor) executeRun(taskID string, server domain.ServerConfig) {
 
 func (e *Executor) markTaskRunning(taskID string) {
 	startedAt := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx := findTaskIndex(data.RemoteTasks, taskID)
-		if taskIdx < 0 {
-			return nil
+	e.state.UpdateRemoteTask(taskID, func(task *domain.RemoteTask) {
+		if task.StartedAt == "" {
+			task.StartedAt = startedAt
 		}
-		if data.RemoteTasks[taskIdx].StartedAt == "" {
-			data.RemoteTasks[taskIdx].StartedAt = startedAt
-		}
-		data.RemoteTasks[taskIdx].Status = "running"
-		return nil
+		task.Status = "running"
 	})
 }
 
 func (e *Executor) finishRun(taskID, serverID string, result collect.CommandResult, runErr error) {
 	finishedAt := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx, runIdx := findTaskRun(data.RemoteTasks, taskID, serverID)
-		if taskIdx < 0 || runIdx < 0 {
-			return nil
+	e.state.UpdateRemoteTask(taskID, func(task *domain.RemoteTask) {
+		runIdx := findRemoteTaskRun(task.Runs, serverID)
+		if runIdx < 0 {
+			return
 		}
-
-		run := &data.RemoteTasks[taskIdx].Runs[runIdx]
+		run := &task.Runs[runIdx]
 		run.Command = firstNonEmpty(strings.TrimSpace(result.Command), run.Command)
 		run.Output = firstNonEmpty(strings.TrimSpace(result.Stdout), strings.TrimSpace(result.Stderr))
 		run.Error = ""
@@ -208,20 +198,13 @@ func (e *Executor) finishRun(taskID, serverID string, result collect.CommandResu
 		} else {
 			run.Status = "completed"
 		}
-		data.RemoteTasks[taskIdx].Status = "running"
-		return nil
+		task.Status = "running"
 	})
 }
 
 func (e *Executor) markTaskFinished(taskID string) {
 	finishedAt := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx := findTaskIndex(data.RemoteTasks, taskID)
-		if taskIdx < 0 {
-			return nil
-		}
-
-		task := &data.RemoteTasks[taskIdx]
+	e.state.UpdateRemoteTask(taskID, func(task *domain.RemoteTask) {
 		completed := 0
 		failed := 0
 		for _, run := range task.Runs {
@@ -245,7 +228,6 @@ func (e *Executor) markTaskFinished(taskID string) {
 		if task.StartedAt == "" {
 			task.StartedAt = finishedAt
 		}
-		return nil
 	})
 }
 
@@ -393,33 +375,13 @@ func resolveJumpHost(data domain.Data, server domain.ServerConfig) (*collect.SSH
 	return nil, errors.New("jump host not found")
 }
 
-func findTask(tasks []domain.RemoteTask, id string) (domain.RemoteTask, bool) {
-	if idx := findTaskIndex(tasks, id); idx >= 0 {
-		return tasks[idx], true
-	}
-	return domain.RemoteTask{}, false
-}
-
-func findTaskIndex(tasks []domain.RemoteTask, id string) int {
-	for i, task := range tasks {
-		if task.ID == id {
+func findRemoteTaskRun(runs []domain.RemoteTaskRun, serverID string) int {
+	for i, run := range runs {
+		if run.ServerID == serverID {
 			return i
 		}
 	}
 	return -1
-}
-
-func findTaskRun(tasks []domain.RemoteTask, taskID, serverID string) (int, int) {
-	taskIdx := findTaskIndex(tasks, taskID)
-	if taskIdx < 0 {
-		return -1, -1
-	}
-	for i, run := range tasks[taskIdx].Runs {
-		if run.ServerID == serverID {
-			return taskIdx, i
-		}
-	}
-	return taskIdx, -1
 }
 
 func findServer(servers []domain.ServerConfig, id string) (domain.ServerConfig, bool) {

@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"modelrun/backend/internal/dispatch"
-	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/store"
 )
 
@@ -21,17 +20,7 @@ func (a *API) handleRemoteTaskPresets(w http.ResponseWriter, r *http.Request) {
 func (a *API) handleRemoteTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		data := a.store.Snapshot()
-		filtered := make([]domain.RemoteTask, 0, len(data.RemoteTasks))
-		filtered = append(filtered, data.RemoteTasks...)
-		if projectID := r.URL.Query().Get("projectId"); projectID != "" {
-			filtered = make([]domain.RemoteTask, 0, len(data.RemoteTasks))
-			for _, task := range data.RemoteTasks {
-				if task.ProjectID == projectID {
-					filtered = append(filtered, task)
-				}
-			}
-		}
+		filtered := a.state.RemoteTasks(r.URL.Query().Get("projectId"))
 		sort.Slice(filtered, func(i, j int) bool {
 			return filtered[i].CreatedAt > filtered[j].CreatedAt
 		})
@@ -66,12 +55,10 @@ func (a *API) handleRemoteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := a.store.Snapshot()
-	for _, task := range data.RemoteTasks {
-		if task.ID == id {
-			writeJSON(w, http.StatusOK, task)
-			return
-		}
+	task, ok := a.state.RemoteTask(id)
+	if ok {
+		writeJSON(w, http.StatusOK, task)
+		return
 	}
 
 	writeError(w, http.StatusNotFound, store.ErrNotFound)

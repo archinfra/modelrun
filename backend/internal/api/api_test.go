@@ -14,6 +14,7 @@ import (
 	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/realtime"
+	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
 )
 
@@ -221,9 +222,10 @@ func newTestHandler(t *testing.T) http.Handler {
 		}
 	})
 	hub := realtime.NewHub()
-	executor := deploy.NewExecutor(st, hub)
+	state := runstate.New()
+	executor := deploy.NewExecutor(st, state, hub)
 
-	return New(st, executor, hub, "").Routes()
+	return New(st, state, executor, hub, "").Routes()
 }
 
 func mustRequest[T any](t *testing.T, handler http.Handler, method, path string, body any) T {

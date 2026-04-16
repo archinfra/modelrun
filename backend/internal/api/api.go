@@ -11,11 +11,13 @@ import (
 	"modelrun/backend/internal/dispatch"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/realtime"
+	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
 )
 
 type API struct {
 	store      *store.Store
+	state      *runstate.State
 	executor   *deploy.Executor
 	hub        *realtime.Hub
 	collector  *collect.Collector
@@ -24,14 +26,15 @@ type API struct {
 	startedAt  time.Time
 }
 
-func New(st *store.Store, executor *deploy.Executor, hub *realtime.Hub, staticDir string) *API {
+func New(st *store.Store, state *runstate.State, executor *deploy.Executor, hub *realtime.Hub, staticDir string) *API {
 	collector := collect.New()
 	return &API{
 		store:      st,
+		state:      state,
 		executor:   executor,
 		hub:        hub,
 		collector:  collector,
-		dispatcher: dispatch.New(st, collector),
+		dispatcher: dispatch.New(st, state, collector),
 		staticDir:  staticDir,
 		startedAt:  time.Now(),
 	}

@@ -13,14 +13,15 @@ func (a *API) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		data := a.store.Snapshot()
-		deployments := data.Deployments
+		deployments := a.state.OverlayDeployments(data.Deployments)
 		if status := r.URL.Query().Get("status"); status != "" {
-			deployments = make([]domain.DeploymentConfig, 0, len(data.Deployments))
-			for _, deployment := range data.Deployments {
+			filtered := make([]domain.DeploymentConfig, 0, len(deployments))
+			for _, deployment := range deployments {
 				if deployment.Status == status {
-					deployments = append(deployments, deployment)
+					filtered = append(filtered, deployment)
 				}
 			}
+			deployments = filtered
 		}
 		writeJSON(w, http.StatusOK, deployments)
 	case http.MethodPost:
@@ -112,7 +113,7 @@ func (a *API) handleDeploymentItem(w http.ResponseWriter, r *http.Request, id st
 			writeError(w, http.StatusNotFound, store.ErrNotFound)
 			return
 		}
-		writeJSON(w, http.StatusOK, data.Deployments[idx])
+		writeJSON(w, http.StatusOK, a.state.OverlayDeployment(data.Deployments[idx]))
 	case http.MethodPut, http.MethodPatch:
 		var patch map[string]json.RawMessage
 		if err := readJSON(r, &patch); err != nil {
@@ -153,14 +154,13 @@ func (a *API) handleDeploymentItem(w http.ResponseWriter, r *http.Request, id st
 				return store.ErrNotFound
 			}
 			data.Deployments = append(data.Deployments[:idx], data.Deployments[idx+1:]...)
-			data.Tasks = filterDeploymentTasks(data.Tasks, id)
-			data.Logs = filterDeploymentLogs(data.Logs, id)
 			return nil
 		})
 		if err != nil {
 			writeStoreError(w, err)
 			return
 		}
+		a.state.DeleteDeployment(id)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(w)
@@ -176,21 +176,7 @@ func (a *API) handleDeploymentLogs(w http.ResponseWriter, r *http.Request, id st
 
 	serverID := r.URL.Query().Get("serverId")
 	stepID := r.URL.Query().Get("stepId")
-	logs := make([]domain.DeploymentLog, 0)
-	for _, entry := range data.Logs {
-		if entry.DeploymentID != id {
-			continue
-		}
-		if serverID != "" && entry.ServerID != serverID {
-			continue
-		}
-		if stepID != "" && entry.StepID != stepID {
-			continue
-		}
-		logs = append(logs, entry)
-	}
-
-	writeJSON(w, http.StatusOK, logs)
+	writeJSON(w, http.StatusOK, a.state.Logs(id, serverID, stepID, 1000))
 }
 
 func (a *API) handleDeploymentMetrics(w http.ResponseWriter, id string) {
@@ -201,12 +187,13 @@ func (a *API) handleDeploymentMetrics(w http.ResponseWriter, id string) {
 		return
 	}
 
-	if data.Deployments[idx].Metrics == nil {
+	metrics := a.state.DeploymentMetrics(id)
+	if metrics == nil {
 		writeJSON(w, http.StatusOK, domain.DeploymentMetrics{})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, data.Deployments[idx].Metrics)
+	writeJSON(w, http.StatusOK, metrics)
 }
 
 type createDeploymentRequest struct {
@@ -292,24 +279,4 @@ func findDeployment(deployments []domain.DeploymentConfig, id string) int {
 		}
 	}
 	return -1
-}
-
-func filterDeploymentTasks(tasks []domain.DeploymentTask, deploymentID string) []domain.DeploymentTask {
-	filtered := tasks[:0]
-	for _, task := range tasks {
-		if task.DeploymentID != deploymentID {
-			filtered = append(filtered, task)
-		}
-	}
-	return filtered
-}
-
-func filterDeploymentLogs(logs []domain.DeploymentLog, deploymentID string) []domain.DeploymentLog {
-	filtered := logs[:0]
-	for _, entry := range logs {
-		if entry.DeploymentID != deploymentID {
-			filtered = append(filtered, entry)
-		}
-	}
-	return filtered
 }

@@ -10,11 +10,13 @@ import (
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/realtime"
+	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
 )
 
 type Executor struct {
 	store     *store.Store
+	state     *runstate.State
 	hub       *realtime.Hub
 	collector *collect.Collector
 	activeMu  sync.Mutex
@@ -32,9 +34,10 @@ type runtimeStepOutput struct {
 
 const maxRuntimeLinesPerStep = 2000
 
-func NewExecutor(st *store.Store, hub *realtime.Hub) *Executor {
+func NewExecutor(st *store.Store, state *runstate.State, hub *realtime.Hub) *Executor {
 	return &Executor{
 		store:     st,
+		state:     state,
 		hub:       hub,
 		collector: collect.New(),
 		active:    map[string]map[string]func(){},
@@ -58,45 +61,30 @@ func (e *Executor) Start(deploymentID string) ([]string, error) {
 	}
 
 	plans := map[string][]plannedStep{}
+	tasks := make([]domain.DeploymentTask, 0, len(serverList))
 	for _, server := range serverList {
 		plan, err := buildPlanWithStepConfigs(deployment, server, serverList, snapshot.PipelineSteps)
 		if err != nil {
 			return nil, err
 		}
 		plans[server.ID] = plan
+		tasks = append(tasks, domain.DeploymentTask{
+			ID:           domain.NewID("task"),
+			DeploymentID: deploymentID,
+			ServerID:     server.ID,
+			Steps:        stepsFromPlan(plan),
+		})
 	}
 
-	taskIDs := make([]string, 0, len(serverList))
-	err = e.store.Update(func(data *domain.Data) error {
-		idx := findDeployment(data.Deployments, deploymentID)
-		if idx < 0 {
-			return store.ErrNotFound
-		}
-
-		data.Tasks = filterTasks(data.Tasks, deploymentID)
-		for _, server := range serverList {
-			task := domain.DeploymentTask{
-				ID:           domain.NewID("task"),
-				DeploymentID: deploymentID,
-				ServerID:     server.ID,
-				Steps:        stepsFromPlan(plans[server.ID]),
-			}
-			data.Tasks = append(data.Tasks, task)
-			taskIDs = append(taskIDs, task.ID)
-		}
-
-		data.Deployments[idx].Status = "deploying"
-		data.Deployments[idx].UpdatedAt = domain.Now()
-		data.Deployments[idx].Endpoints = nil
-		data.Deployments[idx].Metrics = nil
-		return nil
-	})
-	if err != nil {
-		return nil, err
+	taskIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.ID)
 	}
-
 	e.clearRuntimeLogs(deploymentID)
-	updated, _ := getDeployment(e.store.Snapshot().Deployments, deploymentID)
+	e.state.DeleteDeployment(deploymentID)
+	e.state.SetTasks(deploymentID, tasks)
+	e.state.SetDeploymentRuntime(deploymentID, "deploying", nil, nil)
+	updated := e.state.OverlayDeployment(deployment)
 	e.broadcastStatus(updated)
 	go e.run(deploymentID)
 
@@ -112,49 +100,31 @@ func (e *Executor) Stop(deploymentID string) error {
 
 	e.cancelDeploymentCommands(deploymentID)
 	drained := e.drainDeploymentRuntimeLogs(deploymentID)
-
-	var stoppedTasks []domain.DeploymentTask
-	err := e.store.Update(func(data *domain.Data) error {
-		idx := findDeployment(data.Deployments, deploymentID)
-		if idx < 0 {
-			return store.ErrNotFound
-		}
-		data.Deployments[idx].Status = "stopped"
-		data.Deployments[idx].UpdatedAt = domain.Now()
-		for i := range data.Deployments[idx].Endpoints {
-			data.Deployments[idx].Endpoints[i].Status = "unknown"
-		}
-		now := domain.Now()
-		for i := range data.Tasks {
-			if data.Tasks[i].DeploymentID != deploymentID {
+	stoppedTasks := e.state.Tasks(deploymentID)
+	now := domain.Now()
+	for i := range stoppedTasks {
+		for j := range stoppedTasks[i].Steps {
+			if lines := drained[taskStepKey(deploymentID, stoppedTasks[i].ServerID, stoppedTasks[i].Steps[j].ID)]; len(lines) > 0 {
+				stoppedTasks[i].Steps[j].Logs = append(stoppedTasks[i].Steps[j].Logs, lines...)
+			}
+			switch stoppedTasks[i].Steps[j].Status {
+			case "completed", "failed", "stopped":
 				continue
-			}
-			for j := range data.Tasks[i].Steps {
-				if lines := drained[taskStepKey(deploymentID, data.Tasks[i].ServerID, data.Tasks[i].Steps[j].ID)]; len(lines) > 0 {
-					data.Tasks[i].Steps[j].Logs = append(data.Tasks[i].Steps[j].Logs, lines...)
+			default:
+				stoppedTasks[i].Steps[j].Status = "stopped"
+				if stoppedTasks[i].Steps[j].StartTime == "" {
+					stoppedTasks[i].Steps[j].StartTime = now
 				}
-				switch data.Tasks[i].Steps[j].Status {
-				case "completed", "failed", "stopped":
-					continue
-				default:
-					data.Tasks[i].Steps[j].Status = "stopped"
-					if data.Tasks[i].Steps[j].StartTime == "" {
-						data.Tasks[i].Steps[j].StartTime = now
-					}
-					data.Tasks[i].Steps[j].EndTime = now
-				}
+				stoppedTasks[i].Steps[j].EndTime = now
 			}
-			data.Tasks[i].OverallProgress = calculateOverall(data.Tasks[i].Steps)
-			stoppedTasks = append(stoppedTasks, data.Tasks[i])
 		}
-		return nil
-	})
-	if err != nil {
-		return err
+		stoppedTasks[i].OverallProgress = calculateOverall(stoppedTasks[i].Steps)
 	}
+	e.state.SetTasks(deploymentID, stoppedTasks)
+	e.state.SetDeploymentRuntime(deploymentID, "stopped", nil, nil)
 
 	e.addLog(deploymentID, "", "", "warn", "deployment stopped")
-	stopped, _ := getDeployment(e.store.Snapshot().Deployments, deploymentID)
+	stopped := e.state.OverlayDeployment(deployment)
 	for _, task := range stoppedTasks {
 		for _, step := range task.Steps {
 			if step.Status == "stopped" {
@@ -314,55 +284,52 @@ func (e *Executor) stopRuntime(deployment domain.DeploymentConfig) {
 
 func (e *Executor) startStep(deploymentID, serverID string, stepIndex int) {
 	now := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx := findTask(data.Tasks, deploymentID, serverID)
-		if taskIdx < 0 || stepIndex >= len(data.Tasks[taskIdx].Steps) {
-			return nil
+	updated := e.state.UpdateTask(deploymentID, serverID, func(task *domain.DeploymentTask) {
+		if stepIndex >= len(task.Steps) {
+			return
 		}
-
-		task := &data.Tasks[taskIdx]
 		task.CurrentStep = stepIndex
 		task.Steps[stepIndex].Status = "running"
 		task.Steps[stepIndex].StartTime = now
 		task.Steps[stepIndex].Progress = 20
 		task.OverallProgress = calculateOverall(task.Steps)
-
-		e.broadcastProgress(*task, task.Steps[stepIndex])
-		return nil
 	})
+	if updated {
+		tasks := e.state.Tasks(deploymentID)
+		if task, ok := findRuntimeTask(tasks, deploymentID, serverID); ok && stepIndex < len(task.Steps) {
+			e.broadcastProgress(task, task.Steps[stepIndex])
+		}
+	}
 }
 
 func (e *Executor) completeStep(deploymentID, serverID, stepID string, stepIndex int) {
 	drained := e.drainRuntimeStepLogs(deploymentID, serverID, stepID)
 	now := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx := findTask(data.Tasks, deploymentID, serverID)
-		if taskIdx < 0 || stepIndex >= len(data.Tasks[taskIdx].Steps) {
-			return nil
+	updated := e.state.UpdateTask(deploymentID, serverID, func(task *domain.DeploymentTask) {
+		if stepIndex >= len(task.Steps) {
+			return
 		}
-
-		task := &data.Tasks[taskIdx]
 		task.Steps[stepIndex].Logs = append(task.Steps[stepIndex].Logs, drained...)
 		task.Steps[stepIndex].Status = "completed"
 		task.Steps[stepIndex].Progress = 100
 		task.Steps[stepIndex].EndTime = now
 		task.OverallProgress = calculateOverall(task.Steps)
-
-		e.broadcastProgress(*task, task.Steps[stepIndex])
-		return nil
 	})
+	if updated {
+		tasks := e.state.Tasks(deploymentID)
+		if task, ok := findRuntimeTask(tasks, deploymentID, serverID); ok && stepIndex < len(task.Steps) {
+			e.broadcastProgress(task, task.Steps[stepIndex])
+		}
+	}
 }
 
 func (e *Executor) failStep(deploymentID, serverID, stepID string, stepIndex int, stepErr error) {
 	drained := e.drainRuntimeStepLogs(deploymentID, serverID, stepID)
 	now := domain.Now()
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx := findTask(data.Tasks, deploymentID, serverID)
-		if taskIdx < 0 || stepIndex >= len(data.Tasks[taskIdx].Steps) {
-			return nil
+	updated := e.state.UpdateTask(deploymentID, serverID, func(task *domain.DeploymentTask) {
+		if stepIndex >= len(task.Steps) {
+			return
 		}
-
-		task := &data.Tasks[taskIdx]
 		task.Steps[stepIndex].Logs = append(task.Steps[stepIndex].Logs, drained...)
 		task.Steps[stepIndex].Status = "failed"
 		task.Steps[stepIndex].Progress = 100
@@ -371,9 +338,13 @@ func (e *Executor) failStep(deploymentID, serverID, stepID string, stepIndex int
 		if stepErr != nil && len(drained) == 0 {
 			task.Steps[stepIndex].Logs = append(task.Steps[stepIndex].Logs, stepErr.Error())
 		}
-		e.broadcastProgress(*task, task.Steps[stepIndex])
-		return nil
 	})
+	if updated {
+		tasks := e.state.Tasks(deploymentID)
+		if task, ok := findRuntimeTask(tasks, deploymentID, serverID); ok && stepIndex < len(task.Steps) {
+			e.broadcastProgress(task, task.Steps[stepIndex])
+		}
+	}
 }
 
 func (e *Executor) appendStepOutput(deploymentID, serverID, stepID string, lines []string) {
@@ -482,6 +453,15 @@ func taskStepKey(deploymentID, serverID, stepID string) string {
 	return deploymentID + "|" + serverID + "|" + stepID
 }
 
+func findRuntimeTask(tasks []domain.DeploymentTask, deploymentID, serverID string) (domain.DeploymentTask, bool) {
+	for _, task := range tasks {
+		if task.DeploymentID == deploymentID && task.ServerID == serverID {
+			return task, true
+		}
+	}
+	return domain.DeploymentTask{}, false
+}
+
 func (e *Executor) addLog(deploymentID, serverID, stepID, level, message string) {
 	entry := domain.DeploymentLog{
 		Timestamp:    domain.Now(),
@@ -492,13 +472,7 @@ func (e *Executor) addLog(deploymentID, serverID, stepID, level, message string)
 		StepID:       stepID,
 	}
 
-	_ = e.store.Update(func(data *domain.Data) error {
-		data.Logs = append(data.Logs, entry)
-		if len(data.Logs) > 4000 {
-			data.Logs = data.Logs[len(data.Logs)-4000:]
-		}
-		return nil
-	})
+	e.state.AddLog(entry)
 
 	if stepID != "" {
 		e.appendStepOutput(deploymentID, serverID, stepID, []string{message})
@@ -512,46 +486,29 @@ func (e *Executor) addLog(deploymentID, serverID, stepID, level, message string)
 }
 
 func (e *Executor) completeDeployment(deploymentID string) {
-	var deployment domain.DeploymentConfig
-
-	_ = e.store.Update(func(data *domain.Data) error {
-		idx := findDeployment(data.Deployments, deploymentID)
-		if idx < 0 {
-			return nil
-		}
-
-		dep := &data.Deployments[idx]
-		if dep.Status == "stopped" || dep.Status == "failed" {
-			deployment = *dep
-			return nil
-		}
-		dep.Status = "running"
-		dep.UpdatedAt = domain.Now()
-		dep.Endpoints = makeEndpoints(*dep, data.Servers)
-		dep.Metrics = &domain.DeploymentMetrics{}
-		deployment = *dep
-		return nil
-	})
+	snapshot := e.store.Snapshot()
+	deployment, ok := getDeployment(snapshot.Deployments, deploymentID)
+	if !ok {
+		return
+	}
+	if status := e.state.DeploymentStatus(deploymentID); status == "stopped" || status == "failed" {
+		return
+	}
+	e.state.SetDeploymentRuntime(deploymentID, "running", makeEndpoints(deployment, snapshot.Servers), &domain.DeploymentMetrics{})
+	deployment = e.state.OverlayDeployment(deployment)
 
 	e.addLog(deploymentID, "", "", "info", "deployment is running")
 	e.broadcastStatus(deployment)
 }
 
 func (e *Executor) failDeployment(deploymentID string, runErr error) {
-	var deployment domain.DeploymentConfig
-	_ = e.store.Update(func(data *domain.Data) error {
-		idx := findDeployment(data.Deployments, deploymentID)
-		if idx < 0 {
-			return nil
-		}
-		data.Deployments[idx].Status = "failed"
-		data.Deployments[idx].UpdatedAt = domain.Now()
-		for i := range data.Deployments[idx].Endpoints {
-			data.Deployments[idx].Endpoints[i].Status = "unknown"
-		}
-		deployment = data.Deployments[idx]
-		return nil
-	})
+	snapshot := e.store.Snapshot()
+	deployment, ok := getDeployment(snapshot.Deployments, deploymentID)
+	if !ok {
+		return
+	}
+	e.state.SetDeploymentRuntime(deploymentID, "failed", nil, nil)
+	deployment = e.state.OverlayDeployment(deployment)
 	if runErr != nil {
 		e.addLog(deploymentID, "", "", "error", runErr.Error())
 	}
@@ -559,9 +516,7 @@ func (e *Executor) failDeployment(deploymentID string, runErr error) {
 }
 
 func (e *Executor) isStopped(deploymentID string) bool {
-	snapshot := e.store.Snapshot()
-	deployment, ok := getDeployment(snapshot.Deployments, deploymentID)
-	return ok && deployment.Status == "stopped"
+	return e.state.DeploymentStatus(deploymentID) == "stopped"
 }
 
 func (e *Executor) broadcastProgress(task domain.DeploymentTask, step domain.DeploymentStep) {

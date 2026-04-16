@@ -13,15 +13,9 @@ func (a *API) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := a.store.Snapshot()
-	tasks := data.Tasks
+	tasks := []domain.DeploymentTask{}
 	if deploymentID := r.URL.Query().Get("deploymentId"); deploymentID != "" {
-		tasks = make([]domain.DeploymentTask, 0, len(data.Tasks))
-		for _, task := range data.Tasks {
-			if task.DeploymentID == deploymentID {
-				tasks = append(tasks, task)
-			}
-		}
+		tasks = a.state.Tasks(deploymentID)
 	}
 	tasks = a.executor.HydrateTasks(tasks)
 
@@ -40,21 +34,11 @@ func (a *API) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := a.store.Snapshot()
-	idx := findTaskByID(data.Tasks, id)
-	if idx < 0 {
+	task, ok := a.state.TaskByID(id)
+	if !ok {
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, a.executor.HydrateTasks([]domain.DeploymentTask{data.Tasks[idx]})[0])
-}
-
-func findTaskByID(tasks []domain.DeploymentTask, id string) int {
-	for i, task := range tasks {
-		if task.ID == id {
-			return i
-		}
-	}
-	return -1
+	writeJSON(w, http.StatusOK, a.executor.HydrateTasks([]domain.DeploymentTask{task})[0])
 }

@@ -91,7 +91,7 @@ func (s *Store) Update(fn func(*domain.Data) error) error {
 	if err := s.save(next); err != nil {
 		return err
 	}
-	s.data = next
+	s.data = stripRuntimeData(next)
 
 	return nil
 }
@@ -137,12 +137,6 @@ func (s *Store) load() (domain.Data, error) {
 	if data.Deployments, err = loadCollection[domain.DeploymentConfig](s.db, "deployments"); err != nil {
 		return data, err
 	}
-	if data.Tasks, err = loadCollection[domain.DeploymentTask](s.db, "tasks"); err != nil {
-		return data, err
-	}
-	if data.RemoteTasks, err = loadCollection[domain.RemoteTask](s.db, "remote_tasks"); err != nil {
-		return data, err
-	}
 	if data.ActionTemplates, err = loadCollection[domain.ActionTemplate](s.db, "action_templates"); err != nil {
 		return data, err
 	}
@@ -152,15 +146,14 @@ func (s *Store) load() (domain.Data, error) {
 	if data.PipelineSteps, err = loadCollection[domain.PipelineStepTemplate](s.db, "pipeline_steps"); err != nil {
 		return data, err
 	}
-	if data.Logs, err = loadCollection[domain.DeploymentLog](s.db, "logs"); err != nil {
-		return data, err
-	}
+	data = stripRuntimeData(data)
 	ensureSlices(&data)
 
 	return data, nil
 }
 
 func (s *Store) save(data domain.Data) error {
+	data = stripRuntimeData(data)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -190,12 +183,6 @@ func (s *Store) save(data domain.Data) error {
 	if err = saveCollection(tx, "deployments", data.Deployments, func(v domain.DeploymentConfig, _ int) string { return v.ID }); err != nil {
 		return err
 	}
-	if err = saveCollection(tx, "tasks", data.Tasks, func(v domain.DeploymentTask, _ int) string { return v.ID }); err != nil {
-		return err
-	}
-	if err = saveCollection(tx, "remote_tasks", data.RemoteTasks, func(v domain.RemoteTask, _ int) string { return v.ID }); err != nil {
-		return err
-	}
 	if err = saveCollection(tx, "action_templates", data.ActionTemplates, func(v domain.ActionTemplate, _ int) string { return v.ID }); err != nil {
 		return err
 	}
@@ -203,9 +190,6 @@ func (s *Store) save(data domain.Data) error {
 		return err
 	}
 	if err = saveCollection(tx, "pipeline_steps", data.PipelineSteps, func(v domain.PipelineStepTemplate, _ int) string { return v.ID }); err != nil {
-		return err
-	}
-	if err = saveCollection(tx, "logs", data.Logs, func(_ domain.DeploymentLog, i int) string { return fmt.Sprintf("%08d", i) }); err != nil {
 		return err
 	}
 
@@ -285,12 +269,9 @@ func isEmpty(data domain.Data) bool {
 		len(data.JumpHosts) == 0 &&
 		len(data.Models) == 0 &&
 		len(data.Deployments) == 0 &&
-		len(data.Tasks) == 0 &&
-		len(data.RemoteTasks) == 0 &&
 		len(data.ActionTemplates) == 0 &&
 		len(data.BootstrapConfigs) == 0 &&
-		len(data.PipelineSteps) == 0 &&
-		len(data.Logs) == 0
+		len(data.PipelineSteps) == 0
 }
 
 func ensureSlices(data *domain.Data) {
@@ -327,6 +308,33 @@ func ensureSlices(data *domain.Data) {
 	if data.Logs == nil {
 		data.Logs = []domain.DeploymentLog{}
 	}
+}
+
+func stripRuntimeData(data domain.Data) domain.Data {
+	for i := range data.Servers {
+		data.Servers[i].GPUInfo = nil
+		data.Servers[i].DriverVersion = ""
+		data.Servers[i].CUDAVersion = ""
+		data.Servers[i].DockerVersion = ""
+		data.Servers[i].NPUExporterEndpoint = ""
+		data.Servers[i].NPUExporterStatus = ""
+		data.Servers[i].NPUExporterLastCheck = ""
+		data.Servers[i].LastCheck = ""
+		if data.Servers[i].Status == "" || data.Servers[i].Status == "online" || data.Servers[i].Status == "offline" {
+			data.Servers[i].Status = "unknown"
+		}
+	}
+	for i := range data.Deployments {
+		if data.Deployments[i].Status == "deploying" || data.Deployments[i].Status == "running" || data.Deployments[i].Status == "failed" || data.Deployments[i].Status == "stopped" {
+			data.Deployments[i].Status = "draft"
+		}
+		data.Deployments[i].Endpoints = nil
+		data.Deployments[i].Metrics = nil
+	}
+	data.Tasks = []domain.DeploymentTask{}
+	data.RemoteTasks = []domain.RemoteTask{}
+	data.Logs = []domain.DeploymentLog{}
+	return data
 }
 
 func cloneData(data domain.Data) domain.Data {
