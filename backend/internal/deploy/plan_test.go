@@ -241,3 +241,43 @@ func TestWithPathPrivilegesOnlyPrintsHintWhenSudoCheckFails(t *testing.T) {
 		t.Fatalf("expected command to stop appending generic hint to all sudo failures, got %q", command)
 	}
 }
+
+func TestBuildConfiguredStepUsesCustomStepTemplate(t *testing.T) {
+	template, ok := LookupTemplate("tei")
+	if !ok {
+		t.Fatal("expected tei template")
+	}
+
+	step := buildConfiguredStep(template, []domain.PipelineStepTemplate{
+		{
+			Framework:       "tei",
+			StepID:          "pull_image",
+			Name:            "自定义拉取镜像",
+			Description:     "先输出再拉镜像",
+			CommandTemplate: "echo before && {{pullImageCommand}}",
+			PreviewTemplate: "preview {{imageRef}}",
+		},
+	}, "pull_image", buildPipelineRenderValues(
+		domain.DeploymentConfig{ID: "deployment-1", Name: "demo", Framework: "tei", APIPort: 8080},
+		domain.ServerConfig{ID: "server-1", Name: "node-a", Host: "10.0.0.1"},
+		domain.DeploymentRuntimeConfig{ContainerName: "demo-container"},
+		"/data/models/demo",
+		"/data/work/demo",
+		"/data/cache/demo",
+		"ghcr.io/example/demo:latest",
+		stepCommandSet{
+			PullImageCommand: "docker pull 'ghcr.io/example/demo:latest'",
+			PullImagePreview: "docker pull 'ghcr.io/example/demo:latest'",
+		},
+	))
+
+	if step.step.Name != "自定义拉取镜像" {
+		t.Fatalf("step name = %q", step.step.Name)
+	}
+	if !strings.Contains(step.command, "echo before && docker pull 'ghcr.io/example/demo:latest'") {
+		t.Fatalf("step command = %q", step.command)
+	}
+	if step.step.CommandPreview != "preview ghcr.io/example/demo:latest" {
+		t.Fatalf("step preview = %q", step.step.CommandPreview)
+	}
+}

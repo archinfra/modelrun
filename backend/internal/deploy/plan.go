@@ -18,81 +18,117 @@ type plannedStep struct {
 
 const modelscopeRuntimeImage = "registry.cn-beijing.aliyuncs.com/ainfracn/modelscope:1.35.0"
 
-func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, servers []domain.ServerConfig) ([]plannedStep, error) {
-	template, ok := LookupTemplate(deployment.Framework)
-	if !ok {
-		return nil, fmt.Errorf("unsupported framework %q", deployment.Framework)
-	}
-
-	runtime := mergedRuntimeConfig(template, deployment.Runtime)
-	docker := mergedDockerConfig(template, deployment.Docker)
-	modelHostPath := deploymentModelHostPath(deployment, runtime)
-	workDir := deploymentWorkDir(runtime, deployment)
-	cacheDir := deploymentCacheDir(runtime, deployment)
-
-	modelSteps, err := buildModelPreparationSteps(deployment, runtime, modelHostPath)
-	if err != nil {
-		return nil, err
-	}
-	imageRef := dockerImageRef(docker)
-	launchCommand, err := buildLaunchRuntimeCommand(template, deployment, docker, runtime, server, servers, modelHostPath, workDir, cacheDir)
-	if err != nil {
-		return nil, err
-	}
-
-	steps := append(modelSteps,
-		plannedStep{
-			step: domain.DeploymentStep{
-				ID:             "pull_image",
-				Name:           "拉取镜像",
-				Description:    "在目标服务器上拉取当前配置的运行时镜像。",
-				CommandPreview: "docker pull " + shellQuote(imageRef),
-				Status:         "pending",
-				Logs:           []string{},
-			},
-			command: withDockerPrivileges("run_docker pull " + shellQuote(imageRef)),
-		},
-		plannedStep{
-			step: domain.DeploymentStep{
-				ID:             "launch_runtime",
-				Name:           "启动服务",
-				Description:    templateStepDescription(template, "launch_runtime"),
-				CommandPreview: launchCommand,
-				AutoManaged:    true,
-				Status:         "pending",
-				Logs:           []string{},
-			},
-			command: launchCommand,
-		},
-		plannedStep{
-			step: domain.DeploymentStep{
-				ID:             "verify_service",
-				Name:           "验证服务",
-				Description:    templateStepDescription(template, "verify_service"),
-				CommandPreview: buildVerifyCommand(deployment, runtime, server, servers),
-				AutoManaged:    true,
-				Status:         "pending",
-				Logs:           []string{},
-			},
-			command: buildVerifyCommand(deployment, runtime, server, servers),
-		},
-	)
-
-	if template.SupportsRay {
-		for i := range steps {
-			if steps[i].step.ID == "launch_runtime" && deployment.Ray.Enabled {
-				steps[i].step.Optional = false
-				continue
-			}
-			if steps[i].step.ID == "launch_runtime" {
-				steps[i].step.Optional = true
-			}
-		}
-	}
-
-	return steps, nil
+func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, servers []domain.ServerConfig, stepConfigs []domain.PipelineStepTemplate) ([]plannedStep, error) {
+	return buildPlanWithStepConfigs(deployment, server, servers, stepConfigs)
 }
 
+/*
+		template, ok := LookupTemplate(deployment.Framework)
+		if !ok {
+			return nil, fmt.Errorf("unsupported framework %q", deployment.Framework)
+		}
+
+		runtime := mergedRuntimeConfig(template, deployment.Runtime)
+		docker := mergedDockerConfig(template, deployment.Docker)
+		modelHostPath := deploymentModelHostPath(deployment, runtime)
+		workDir := deploymentWorkDir(runtime, deployment)
+		cacheDir := deploymentCacheDir(runtime, deployment)
+
+		imageRef := dockerImageRef(docker)
+		launchCommand, err := buildLaunchRuntimeCommand(template, deployment, docker, runtime, server, servers, modelHostPath, workDir, cacheDir)
+		if err != nil {
+			return nil, err
+		}
+		verifyCommand := buildVerifyCommand(deployment, runtime, server, servers)
+		checkCommand, err := buildCheckModelTargetCommand(deployment, modelHostPath)
+		if err != nil {
+			return nil, err
+		}
+		fetcherCommand, err := buildPrepareModelFetcherCommand(deployment)
+		if err != nil {
+			return nil, err
+		}
+		syncCommand, err := buildSyncModelCommand(deployment, runtime, modelHostPath)
+		if err != nil {
+			return nil, err
+		}
+		renderValues := buildPipelineRenderValues(
+			deployment,
+			server,
+			runtime,
+			modelHostPath,
+			workDir,
+			cacheDir,
+			imageRef,
+			stepCommandSet{
+				CheckModelTargetCommand:    checkCommand,
+				CheckModelTargetPreview:    buildCheckModelTargetPreview(deployment, modelHostPath),
+				PrepareModelFetcherCommand: fetcherCommand,
+				PrepareModelFetcherPreview: buildPrepareModelFetcherPreview(deployment),
+				SyncModelCommand:           syncCommand,
+				SyncModelPreview:           buildSyncModelPreview(deployment, modelHostPath),
+				PullImageCommand:           withDockerPrivileges("run_docker pull " + shellQuote(imageRef)),
+				PullImagePreview:           "docker pull " + shellQuote(imageRef),
+				LaunchRuntimeCommand:       launchCommand,
+				LaunchRuntimePreview:       launchCommand,
+				VerifyServiceCommand:       verifyCommand,
+				VerifyServicePreview:       verifyCommand,
+			},
+		)
+
+		steps := []plannedStep{
+			plannedStep{
+				step: domain.DeploymentStep{
+					ID:             "pull_image",
+					Name:           "拉取镜像",
+					Description:    "在目标服务器上拉取当前配置的运行时镜像。",
+					CommandPreview: "docker pull " + shellQuote(imageRef),
+					Status:         "pending",
+					Logs:           []string{},
+				},
+				command: withDockerPrivileges("run_docker pull " + shellQuote(imageRef)),
+			},
+			plannedStep{
+				step: domain.DeploymentStep{
+					ID:             "launch_runtime",
+					Name:           "启动服务",
+					Description:    templateStepDescription(template, "launch_runtime"),
+					CommandPreview: launchCommand,
+					AutoManaged:    true,
+					Status:         "pending",
+					Logs:           []string{},
+				},
+				command: launchCommand,
+			},
+			plannedStep{
+				step: domain.DeploymentStep{
+					ID:             "verify_service",
+					Name:           "验证服务",
+					Description:    templateStepDescription(template, "verify_service"),
+					CommandPreview: buildVerifyCommand(deployment, runtime, server, servers),
+					AutoManaged:    true,
+					Status:         "pending",
+					Logs:           []string{},
+				},
+				command: buildVerifyCommand(deployment, runtime, server, servers),
+			},
+		)
+
+		if template.SupportsRay {
+			for i := range steps {
+				if steps[i].step.ID == "launch_runtime" && deployment.Ray.Enabled {
+					steps[i].step.Optional = false
+					continue
+				}
+				if steps[i].step.ID == "launch_runtime" {
+					steps[i].step.Optional = true
+				}
+			}
+		}
+
+		return steps, nil
+	}
+*/
 func stepsFromPlan(plan []plannedStep) []domain.DeploymentStep {
 	steps := make([]domain.DeploymentStep, 0, len(plan))
 	for _, item := range plan {

@@ -66,7 +66,10 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/action-templates/", a.handleActionTemplate)
 	mux.HandleFunc("/api/bootstrap-configs", a.handleBootstrapConfigs)
 	mux.HandleFunc("/api/bootstrap-configs/", a.handleBootstrapConfig)
+	mux.HandleFunc("/api/pipeline-step-templates", a.handlePipelineStepTemplates)
+	mux.HandleFunc("/api/pipeline-step-templates/", a.handlePipelineStepTemplate)
 	mux.HandleFunc("/api/pipeline-templates", a.handlePipelineTemplates)
+	mux.HandleFunc("/api/logs", a.handleLogs)
 
 	mux.HandleFunc("/ws", a.hub.ServeHTTP)
 

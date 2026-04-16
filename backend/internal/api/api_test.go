@@ -145,6 +145,58 @@ func TestListRemoteTasksEmpty(t *testing.T) {
 	}
 }
 
+func TestPipelineStepTemplateOverridesPipelineBoardMetadata(t *testing.T) {
+	handler := newTestHandler(t)
+
+	steps := mustRequest[[]domain.PipelineStepTemplate](t, handler, http.MethodGet, "/api/pipeline-step-templates", map[string]any{})
+	if len(steps) == 0 {
+		t.Fatal("expected built-in pipeline step templates")
+	}
+
+	var target domain.PipelineStepTemplate
+	for _, item := range steps {
+		if item.Framework == "vllm-ascend" && item.StepID == "launch_runtime" {
+			target = item
+			break
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("expected vllm-ascend launch_runtime step template")
+	}
+
+	mustRequest[domain.PipelineStepTemplate](t, handler, http.MethodPatch, "/api/pipeline-step-templates/"+target.ID, map[string]any{
+		"name":            "自定义启动步骤",
+		"description":     "新的启动说明",
+		"commandTemplate": "echo prepare && {{launchRuntimeCommand}}",
+		"previewTemplate": "echo preview",
+		"details":         []string{"first", "second"},
+	})
+
+	templates := mustRequest[[]domain.PipelineTemplate](t, handler, http.MethodGet, "/api/pipeline-templates", map[string]any{})
+	var launchStep domain.PipelineTemplateStep
+	for _, template := range templates {
+		if template.Framework != "vllm-ascend" {
+			continue
+		}
+		for _, step := range template.Steps {
+			if step.ID == "launch_runtime" {
+				launchStep = step
+				break
+			}
+		}
+	}
+
+	if launchStep.Name != "自定义启动步骤" {
+		t.Fatalf("launch step name = %q, want custom override", launchStep.Name)
+	}
+	if launchStep.Description != "新的启动说明" {
+		t.Fatalf("launch step description = %q, want custom override", launchStep.Description)
+	}
+	if got := strings.Join(launchStep.Details, ","); got != "first,second" {
+		t.Fatalf("launch step details = %q", got)
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	previousFake := os.Getenv("MODELRUN_FAKE_CONNECT")

@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Database,
   FileJson,
+  FileText,
   Pencil,
   Plus,
   RefreshCw,
@@ -14,7 +15,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { requestJSON } from '../lib/api';
-import { ActionTemplate, BootstrapConfig, SystemStatus } from '../types';
+import { ActionTemplate, BootstrapConfig, DeploymentLog, PipelineStepTemplate, SystemStatus } from '../types';
 
 type ActionTemplateDraft = Partial<ActionTemplate> & {
   fieldsText: string;
@@ -23,6 +24,10 @@ type ActionTemplateDraft = Partial<ActionTemplate> & {
 
 type BootstrapDraft = Partial<BootstrapConfig> & {
   defaultArgsText: string;
+};
+
+type PipelineStepDraft = Partial<PipelineStepTemplate> & {
+  detailsText: string;
 };
 
 const emptyActionDraft = (): ActionTemplateDraft => ({
@@ -50,6 +55,34 @@ const emptyBootstrapDraft = (): BootstrapDraft => ({
   defaultArgsText: '{}',
 });
 
+const emptyPipelineStepDraft = (): PipelineStepDraft => ({
+  framework: 'vllm-ascend',
+  stepId: 'custom_step',
+  name: '',
+  description: '',
+  commandTemplate: '',
+  previewTemplate: '',
+  builtIn: false,
+  detailsText: '[]',
+});
+
+const stepTemplatePlaceholders = [
+  '{{checkModelTargetCommand}} / {{checkModelTargetPreview}}',
+  '{{prepareModelFetcherCommand}} / {{prepareModelFetcherPreview}}',
+  '{{syncModelCommand}} / {{syncModelPreview}}',
+  '{{pullImageCommand}} / {{pullImagePreview}}',
+  '{{launchRuntimeCommand}} / {{launchRuntimePreview}}',
+  '{{verifyServiceCommand}} / {{verifyServicePreview}}',
+  '{{imageRef}} / {{imageRefQuoted}}',
+  '{{containerName}} / {{containerNameQuoted}}',
+  '{{modelHostPath}} / {{modelHostPathQuoted}}',
+  '{{workDir}} / {{workDirQuoted}}',
+  '{{cacheDir}} / {{cacheDirQuoted}}',
+  '{{serverHost}} / {{serverHostQuoted}}',
+  '{{modelId}} / {{modelIdQuoted}}',
+  '{{apiPort}} / {{apiPortQuoted}}',
+];
+
 const parseJSONText = <T,>(value: string, fallback: T): T => {
   if (!value.trim()) return fallback;
   return JSON.parse(value) as T;
@@ -64,27 +97,37 @@ export const ConfigCenter: React.FC = () => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [actions, setActions] = useState<ActionTemplate[]>([]);
   const [bootstraps, setBootstraps] = useState<BootstrapConfig[]>([]);
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStepTemplate[]>([]);
+  const [logs, setLogs] = useState<DeploymentLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [expandedActionId, setExpandedActionId] = useState<string | null>(null);
   const [expandedBootstrapId, setExpandedBootstrapId] = useState<string | null>(null);
+  const [expandedPipelineStepId, setExpandedPipelineStepId] = useState<string | null>(null);
   const [showActionModal, setShowActionModal] = useState(false);
   const [showBootstrapModal, setShowBootstrapModal] = useState(false);
+  const [showPipelineStepModal, setShowPipelineStepModal] = useState(false);
   const [editingAction, setEditingAction] = useState<ActionTemplate | null>(null);
   const [editingBootstrap, setEditingBootstrap] = useState<BootstrapConfig | null>(null);
+  const [editingPipelineStep, setEditingPipelineStep] = useState<PipelineStepTemplate | null>(null);
   const [actionDraft, setActionDraft] = useState<ActionTemplateDraft>(emptyActionDraft);
   const [bootstrapDraft, setBootstrapDraft] = useState<BootstrapDraft>(emptyBootstrapDraft);
+  const [pipelineStepDraft, setPipelineStepDraft] = useState<PipelineStepDraft>(emptyPipelineStepDraft);
 
   const load = async () => {
-    const [status, actionItems, bootstrapItems] = await Promise.all([
+    const [status, actionItems, bootstrapItems, pipelineStepItems, logItems] = await Promise.all([
       requestJSON<SystemStatus>('/api/system/status'),
       requestJSON<ActionTemplate[]>('/api/action-templates'),
       requestJSON<BootstrapConfig[]>('/api/bootstrap-configs'),
+      requestJSON<PipelineStepTemplate[]>('/api/pipeline-step-templates'),
+      requestJSON<DeploymentLog[]>('/api/logs?limit=200'),
     ]);
     setSystemStatus(status);
     setActions(Array.isArray(actionItems) ? actionItems : []);
     setBootstraps(Array.isArray(bootstrapItems) ? bootstrapItems : []);
+    setPipelineSteps(Array.isArray(pipelineStepItems) ? pipelineStepItems : []);
+    setLogs(Array.isArray(logItems) ? logItems : []);
   };
 
   useEffect(() => {
@@ -108,6 +151,15 @@ export const ConfigCenter: React.FC = () => {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      requestJSON<DeploymentLog[]>('/api/logs?limit=200')
+        .then((items) => setLogs(Array.isArray(items) ? items : []))
+        .catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const actionOptions = useMemo(
@@ -147,6 +199,21 @@ export const ConfigCenter: React.FC = () => {
       defaultArgsText: JSON.stringify(item.defaultArgs || {}, null, 2),
     });
     setShowBootstrapModal(true);
+  };
+
+  const openCreatePipelineStep = () => {
+    setEditingPipelineStep(null);
+    setPipelineStepDraft(emptyPipelineStepDraft());
+    setShowPipelineStepModal(true);
+  };
+
+  const openEditPipelineStep = (item: PipelineStepTemplate) => {
+    setEditingPipelineStep(item);
+    setPipelineStepDraft({
+      ...item,
+      detailsText: JSON.stringify(item.details || [], null, 2),
+    });
+    setShowPipelineStepModal(true);
   };
 
   const handleSaveAction = async (event: React.FormEvent) => {
@@ -248,6 +315,56 @@ export const ConfigCenter: React.FC = () => {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除服务初始化项失败');
+    }
+  };
+
+  const handleSavePipelineStep = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        framework: pipelineStepDraft.framework?.trim(),
+        stepId: pipelineStepDraft.stepId?.trim(),
+        name: pipelineStepDraft.name?.trim(),
+        description: pipelineStepDraft.description?.trim(),
+        commandTemplate: pipelineStepDraft.commandTemplate || '',
+        previewTemplate: pipelineStepDraft.previewTemplate || '',
+        builtIn: Boolean(pipelineStepDraft.builtIn),
+        optional: Boolean(pipelineStepDraft.optional),
+        autoManaged: Boolean(pipelineStepDraft.autoManaged),
+        details: parseJSONText(pipelineStepDraft.detailsText, []),
+      };
+
+      if (editingPipelineStep) {
+        await requestJSON<PipelineStepTemplate>(`/api/pipeline-step-templates/${editingPipelineStep.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+        setNotice(`已更新流水线步骤脚本 ${payload.framework}/${payload.stepId}`);
+      } else {
+        await requestJSON<PipelineStepTemplate>('/api/pipeline-step-templates', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        setNotice(`已新增流水线步骤脚本 ${payload.framework}/${payload.stepId}`);
+      }
+
+      setShowPipelineStepModal(false);
+      await load();
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存流水线步骤脚本失败');
+    }
+  };
+
+  const handleDeletePipelineStep = async (item: PipelineStepTemplate) => {
+    if (!window.confirm(`删除流水线步骤脚本“${item.framework}/${item.stepId}”吗？`)) return;
+    try {
+      await requestJSON<void>(`/api/pipeline-step-templates/${item.id}`, { method: 'DELETE' });
+      setNotice(`已删除流水线步骤脚本 ${item.framework}/${item.stepId}`);
+      await load();
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除流水线步骤脚本失败');
     }
   };
 
@@ -426,6 +543,104 @@ export const ConfigCenter: React.FC = () => {
       <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
+            <FileText className="w-5 h-5 text-violet-600" />
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Pipeline Step Scripts</h2>
+              <p className="text-sm text-slate-500">部署步骤不再写死在后端代码里。这里可以直接编辑每一步真正执行的脚本模板。</p>
+            </div>
+          </div>
+          <button
+            onClick={openCreatePipelineStep}
+            className="flex items-center gap-2 px-4 py-2.5 bg-violet-600 text-white rounded-xl hover:bg-violet-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            新增步骤脚本
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          <div className="font-medium text-slate-900 mb-2">可用占位符</div>
+          <div className="flex flex-wrap gap-2">
+            {stepTemplatePlaceholders.map((item) => (
+              <code key={item} className="rounded-lg bg-white px-2 py-1 text-xs text-slate-700 border border-slate-200">
+                {item}
+              </code>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {pipelineSteps.map((item) => {
+            const expanded = expandedPipelineStepId === item.id;
+            return (
+              <div key={item.id} className="border border-slate-200 rounded-2xl overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setExpandedPipelineStepId(expanded ? null : item.id)}
+                  className="w-full px-5 py-4 flex items-start justify-between gap-4 hover:bg-slate-50 transition-colors"
+                >
+                  <div className="text-left min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-slate-900">{item.name}</span>
+                      {item.builtIn && <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">built-in</span>}
+                      <span className="px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 text-xs">{item.framework}</span>
+                      <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">{item.stepId}</span>
+                    </div>
+                    <div className="text-sm text-slate-500 mt-2">{item.description}</div>
+                  </div>
+                  {expanded ? <ChevronDown className="w-5 h-5 text-slate-400" /> : <ChevronRight className="w-5 h-5 text-slate-400" />}
+                </button>
+                {expanded && (
+                  <div className="border-t border-slate-200 px-5 py-4 bg-slate-50 space-y-3">
+                    <div className="grid gap-3 md:grid-cols-2 text-sm">
+                      <KV label="Framework" value={item.framework} />
+                      <KV label="Step ID" value={item.stepId} />
+                      <KV label="Auto Managed" value={item.autoManaged ? 'yes' : 'no'} />
+                      <KV label="Optional" value={item.optional ? 'yes' : 'no'} />
+                    </div>
+                    {item.details?.length ? (
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="text-sm font-medium text-slate-900 mb-2">Step Details</div>
+                        <pre className="text-xs bg-slate-900 text-slate-100 rounded-xl p-4 overflow-x-auto whitespace-pre-wrap break-all">{JSON.stringify(item.details, null, 2)}</pre>
+                      </div>
+                    ) : null}
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="text-sm font-medium text-slate-900 mb-2">Preview Template</div>
+                        <pre className="text-xs bg-slate-900 text-slate-100 rounded-xl p-4 overflow-x-auto whitespace-pre-wrap break-all">{item.previewTemplate || item.commandTemplate}</pre>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="text-sm font-medium text-slate-900 mb-2">Command Template</div>
+                        <pre className="text-xs bg-slate-900 text-slate-100 rounded-xl p-4 overflow-x-auto whitespace-pre-wrap break-all">{item.commandTemplate}</pre>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => openEditPipelineStep(item)}
+                        className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-700 hover:bg-slate-100 transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                        编辑
+                      </button>
+                      <button
+                        onClick={() => handleDeletePipelineStep(item)}
+                        className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-red-200 rounded-xl text-red-700 hover:bg-red-50 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
             <Wrench className="w-5 h-5 text-blue-600" />
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Action Templates</h2>
@@ -505,6 +720,34 @@ export const ConfigCenter: React.FC = () => {
         </div>
       </section>
 
+      <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <Database className="w-5 h-5 text-slate-700" />
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Backend Logs</h2>
+            <p className="text-sm text-slate-500">查看最近 200 条后端事件日志。运行中的步骤日志仍然走 WebSocket，结束态摘要会沉淀到这里。</p>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-950 text-slate-100 p-4 max-h-[28rem] overflow-y-auto font-mono text-xs space-y-2">
+          {logs.length === 0 ? (
+            <div className="text-slate-400">当前还没有后端日志。</div>
+          ) : (
+            logs.slice().reverse().map((item, index) => (
+              <div key={`${item.timestamp}-${index}`} className="break-all">
+                <span className="text-slate-500">[{item.timestamp}]</span>{' '}
+                <span className={item.level === 'error' ? 'text-red-300' : item.level === 'warn' ? 'text-amber-300' : 'text-emerald-300'}>
+                  {item.level.toUpperCase()}
+                </span>{' '}
+                {item.deploymentId ? <span className="text-blue-300">{item.deploymentId}</span> : null}
+                {item.serverId ? <span className="text-violet-300"> {item.serverId}</span> : null}
+                {item.stepId ? <span className="text-slate-400"> {item.stepId}</span> : null}
+                <span className="text-slate-100"> {item.message}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
       {showActionModal && (
         <Modal title={editingAction ? '编辑动作模板' : '新增动作模板'} onClose={() => setShowActionModal(false)}>
           <form onSubmit={handleSaveAction} className="space-y-4">
@@ -543,6 +786,61 @@ export const ConfigCenter: React.FC = () => {
               标记为 built-in
             </label>
             <ModalActions onClose={() => setShowActionModal(false)} />
+          </form>
+        </Modal>
+      )}
+
+      {showPipelineStepModal && (
+        <Modal title={editingPipelineStep ? '编辑流水线步骤脚本' : '新增流水线步骤脚本'} onClose={() => setShowPipelineStepModal(false)}>
+          <form onSubmit={handleSavePipelineStep} className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Input label="Framework" value={pipelineStepDraft.framework || ''} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, framework: value }))} />
+              <Input label="Step ID" value={pipelineStepDraft.stepId || ''} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, stepId: value }))} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Input label="名称" value={pipelineStepDraft.name || ''} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, name: value }))} />
+              <Input label="预览模板" value={pipelineStepDraft.previewTemplate || ''} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, previewTemplate: value }))} />
+            </div>
+            <Textarea label="描述" value={pipelineStepDraft.description || ''} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, description: value }))} rows={3} />
+            <Textarea label="命令模板" value={pipelineStepDraft.commandTemplate || ''} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, commandTemplate: value }))} rows={10} />
+            <Textarea label="细节 JSON" value={pipelineStepDraft.detailsText} onChange={(value) => setPipelineStepDraft((current) => ({ ...current, detailsText: value }))} rows={5} />
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+              <div className="font-medium text-slate-900 mb-2">常用占位符</div>
+              <div className="flex flex-wrap gap-2">
+                {stepTemplatePlaceholders.map((item) => (
+                  <code key={item} className="rounded-lg bg-white px-2 py-1 text-xs text-slate-700 border border-slate-200">
+                    {item}
+                  </code>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="flex items-center gap-3 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(pipelineStepDraft.optional)}
+                  onChange={(event) => setPipelineStepDraft((current) => ({ ...current, optional: event.target.checked }))}
+                />
+                可选步骤
+              </label>
+              <label className="flex items-center gap-3 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(pipelineStepDraft.autoManaged)}
+                  onChange={(event) => setPipelineStepDraft((current) => ({ ...current, autoManaged: event.target.checked }))}
+                />
+                自动托管
+              </label>
+              <label className="flex items-center gap-3 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(pipelineStepDraft.builtIn)}
+                  onChange={(event) => setPipelineStepDraft((current) => ({ ...current, builtIn: event.target.checked }))}
+                />
+                标记为 built-in
+              </label>
+            </div>
+            <ModalActions onClose={() => setShowPipelineStepModal(false)} />
           </form>
         </Modal>
       )}

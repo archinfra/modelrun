@@ -36,6 +36,18 @@ func EnsureDefaults(data *domain.Data) bool {
 		changed = true
 	}
 
+	pipelineStepIndex := map[string]int{}
+	for i, item := range data.PipelineSteps {
+		pipelineStepIndex[item.ID] = i
+	}
+	for _, item := range DefaultPipelineStepTemplates() {
+		if _, ok := pipelineStepIndex[item.ID]; ok {
+			continue
+		}
+		data.PipelineSteps = append(data.PipelineSteps, item)
+		changed = true
+	}
+
 	return changed
 }
 
@@ -254,6 +266,122 @@ func DefaultBootstrapConfigs() []domain.BootstrapConfig {
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		},
+	}
+}
+
+func DefaultPipelineStepTemplates() []domain.PipelineStepTemplate {
+	now := domain.Now()
+	items := make([]domain.PipelineStepTemplate, 0, 18)
+	for _, framework := range []string{"tei", "vllm-ascend", "mindie"} {
+		for _, step := range defaultPipelineStepMetadata(framework) {
+			commandTemplate, previewTemplate := defaultPipelineStepCommands(step.ID)
+			items = append(items, domain.PipelineStepTemplate{
+				ID:              framework + "_" + step.ID,
+				Framework:       framework,
+				StepID:          step.ID,
+				Name:            step.Name,
+				Description:     step.Description,
+				Optional:        step.Optional,
+				AutoManaged:     step.AutoManaged,
+				BuiltIn:         true,
+				CommandTemplate: commandTemplate,
+				PreviewTemplate: previewTemplate,
+				Details:         append([]string{}, step.Details...),
+				CreatedAt:       now,
+				UpdatedAt:       now,
+			})
+		}
+	}
+	return items
+}
+
+func defaultPipelineStepMetadata(framework string) []domain.PipelineTemplateStep {
+	launchDescription := "Generate the runtime launch assets and start the service in Docker."
+	launchDetails := []string{
+		"The container is recreated with restart policy unless-stopped.",
+		"The same launch command is reused after host or container restart.",
+	}
+	verifyDescription := "Probe the local API endpoint and collect container diagnostics if the probe fails."
+
+	switch framework {
+	case "vllm-ascend":
+		launchDescription = "Generate launch assets, initialize Ray when enabled, and start the vLLM runtime in Docker."
+		launchDetails = []string{
+			"Ray head and worker nodes use different startup commands automatically.",
+			"Worker nodes only join the Ray cluster and keep the container alive for distributed execution.",
+			"Container restart continues to use the same launch script and runtime arguments.",
+		}
+		verifyDescription = "Probe the OpenAI compatible API on the head node, or run ray status checks on worker nodes."
+	case "mindie":
+		launchDescription = "Generate config.json, recreate the container, and start MindIE in one managed step."
+		launchDetails = []string{
+			"The generated config.json is written under the deployment work directory on the host.",
+			"The container restart policy keeps the runtime behavior consistent after reboot.",
+		}
+		verifyDescription = "Probe the generated service endpoint and print container diagnostics when startup is incomplete."
+	}
+
+	return []domain.PipelineTemplateStep{
+		{
+			ID:          "check_model_target",
+			Name:        "检查模型目录",
+			Description: "确认本次部署将使用的模型目录或本地模型路径。",
+			Details: []string{
+				"远端模型会展示目标目录是否已有模型文件。",
+				"本地模型会直接校验路径是否存在。",
+			},
+		},
+		{
+			ID:          "prepare_model_fetcher",
+			Name:        "准备模型下载器",
+			Description: "按模型来源准备下载工具；ModelScope 缺失时会自动切换到容器化命令。",
+			Details: []string{
+				"ModelScope 优先使用远端机器本地的 modelscope 命令。",
+				"如果远端没有 modelscope，则自动使用 registry.cn-beijing.aliyuncs.com/ainfracn/modelscope:1.35.0。",
+			},
+		},
+		{
+			ID:          "sync_model",
+			Name:        "同步模型",
+			Description: "模型文件存在时直接复用，不存在时再执行下载或校验。",
+		},
+		{
+			ID:          "pull_image",
+			Name:        "拉取镜像",
+			Description: "在目标服务器拉取当前部署所需的运行时镜像。",
+		},
+		{
+			ID:          "launch_runtime",
+			Name:        "启动服务",
+			Description: launchDescription,
+			AutoManaged: true,
+			Details:     launchDetails,
+		},
+		{
+			ID:          "verify_service",
+			Name:        "验证服务",
+			Description: verifyDescription,
+			AutoManaged: true,
+		},
+	}
+}
+
+func defaultPipelineStepCommands(stepID string) (string, string) {
+	switch stepID {
+	case "check_model_target":
+		return "{{checkModelTargetCommand}}", "{{checkModelTargetPreview}}"
+	case "prepare_model_fetcher":
+		return "{{prepareModelFetcherCommand}}", "{{prepareModelFetcherPreview}}"
+	case "sync_model":
+		return "{{syncModelCommand}}", "{{syncModelPreview}}"
+	case "pull_image":
+		return "{{pullImageCommand}}", "{{pullImagePreview}}"
+	case "launch_runtime":
+		return "{{launchRuntimeCommand}}", "{{launchRuntimePreview}}"
+	case "verify_service":
+		return "{{verifyServiceCommand}}", "{{verifyServicePreview}}"
+	default:
+		return "", ""
 	}
 }
 

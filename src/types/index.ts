@@ -289,6 +289,22 @@ export interface BootstrapConfig {
   updatedAt: string;
 }
 
+export interface PipelineStepTemplate {
+  id: string;
+  framework: string;
+  stepId: string;
+  name: string;
+  description: string;
+  optional?: boolean;
+  autoManaged?: boolean;
+  builtIn?: boolean;
+  commandTemplate: string;
+  previewTemplate?: string;
+  details?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PipelineTemplateStep {
   id: string;
   name: string;
@@ -374,6 +390,7 @@ export interface DeploymentLog {
   timestamp: string;
   level: 'info' | 'warn' | 'error' | 'debug';
   message: string;
+  deploymentId?: string;
   serverId?: string;
   stepId?: string;
 }

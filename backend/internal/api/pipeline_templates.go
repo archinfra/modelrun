@@ -12,5 +12,6 @@ func (a *API) handlePipelineTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, deploy.PipelineTemplates())
+	data := a.store.Snapshot()
+	writeJSON(w, http.StatusOK, deploy.PipelineTemplatesWithStepConfigs(data.PipelineSteps))
 }

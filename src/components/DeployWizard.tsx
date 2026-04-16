@@ -275,6 +275,8 @@ export const DeployWizard: React.FC = () => {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const logRefs = useRef<Record<string, HTMLPreElement | null>>({});
+  const pendingStepLogsRef = useRef<Record<string, string[]>>({});
+  const flushStepLogsTimerRef = useRef<number | null>(null);
 
   const currentProject = projects.find((item) => item.id === currentProjectId);
   const selectedTemplate = useMemo(
@@ -297,6 +299,29 @@ export const DeployWizard: React.FC = () => {
     () => deployments.find((item) => item.id === currentDeploymentId),
     [currentDeploymentId, deployments]
   );
+
+  const flushPendingStepLogs = () => {
+    const pending = pendingStepLogsRef.current;
+    pendingStepLogsRef.current = {};
+    flushStepLogsTimerRef.current = null;
+    const entries = Object.entries(pending);
+    if (!entries.length) return;
+    setTasks((current) => {
+      let next = current;
+      entries.forEach(([key, lines]) => {
+        const [serverId, stepId] = key.split('|');
+        next = appendTaskStepLogs(next, serverId, stepId, lines);
+      });
+      return next;
+    });
+  };
+
+  const scheduleFlushPendingStepLogs = () => {
+    if (flushStepLogsTimerRef.current !== null) return;
+    flushStepLogsTimerRef.current = window.setTimeout(() => {
+      flushPendingStepLogs();
+    }, 180);
+  };
 
   const loadBase = async () => {
     const [templateItems, modelItems, serverItems, deploymentItems] = await Promise.all([
@@ -343,7 +368,7 @@ export const DeployWizard: React.FC = () => {
       setTasks(taskItems || []);
     };
     void poll();
-    const timer = window.setInterval(() => void poll(), 10000);
+    const timer = window.setInterval(() => void poll(), 30000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -388,7 +413,9 @@ export const DeployWizard: React.FC = () => {
         }
 
         if (message.type === 'step_log' && data?.serverId && data.stepId && data.lines?.length) {
-          setTasks((current) => appendTaskStepLogs(current, data.serverId || '', data.stepId || '', data.lines || []));
+          const key = `${data.serverId || ''}|${data.stepId || ''}`;
+          pendingStepLogsRef.current[key] = [...(pendingStepLogsRef.current[key] || []), ...(data.lines || [])];
+          scheduleFlushPendingStepLogs();
           return;
         }
 
@@ -412,6 +439,11 @@ export const DeployWizard: React.FC = () => {
 
     return () => {
       active = false;
+      if (flushStepLogsTimerRef.current !== null) {
+        window.clearTimeout(flushStepLogsTimerRef.current);
+        flushStepLogsTimerRef.current = null;
+      }
+      pendingStepLogsRef.current = {};
       window.clearTimeout(retryTimer);
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'unsubscribe', deploymentId: currentDeploymentId }));
@@ -419,6 +451,15 @@ export const DeployWizard: React.FC = () => {
       socket?.close();
     };
   }, [currentDeploymentId]);
+
+  useEffect(
+    () => () => {
+      if (flushStepLogsTimerRef.current !== null) {
+        window.clearTimeout(flushStepLogsTimerRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!expandedStepId) return;

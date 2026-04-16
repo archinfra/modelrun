@@ -59,7 +59,7 @@ func (e *Executor) Start(deploymentID string) ([]string, error) {
 
 	plans := map[string][]plannedStep{}
 	for _, server := range serverList {
-		plan, err := buildPlan(deployment, server, serverList)
+		plan, err := buildPlanWithStepConfigs(deployment, server, serverList, snapshot.PipelineSteps)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +209,7 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 		return err
 	}
 
-	plan, err := buildPlan(deployment, server, servers)
+	plan, err := buildPlanWithStepConfigs(deployment, server, servers, snapshot.PipelineSteps)
 	if err != nil {
 		return err
 	}

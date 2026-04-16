@@ -149,6 +149,9 @@ func (s *Store) load() (domain.Data, error) {
 	if data.BootstrapConfigs, err = loadCollection[domain.BootstrapConfig](s.db, "bootstrap_configs"); err != nil {
 		return data, err
 	}
+	if data.PipelineSteps, err = loadCollection[domain.PipelineStepTemplate](s.db, "pipeline_steps"); err != nil {
+		return data, err
+	}
 	if data.Logs, err = loadCollection[domain.DeploymentLog](s.db, "logs"); err != nil {
 		return data, err
 	}
@@ -197,6 +200,9 @@ func (s *Store) save(data domain.Data) error {
 		return err
 	}
 	if err = saveCollection(tx, "bootstrap_configs", data.BootstrapConfigs, func(v domain.BootstrapConfig, _ int) string { return v.ID }); err != nil {
+		return err
+	}
+	if err = saveCollection(tx, "pipeline_steps", data.PipelineSteps, func(v domain.PipelineStepTemplate, _ int) string { return v.ID }); err != nil {
 		return err
 	}
 	if err = saveCollection(tx, "logs", data.Logs, func(_ domain.DeploymentLog, i int) string { return fmt.Sprintf("%08d", i) }); err != nil {
@@ -283,6 +289,7 @@ func isEmpty(data domain.Data) bool {
 		len(data.RemoteTasks) == 0 &&
 		len(data.ActionTemplates) == 0 &&
 		len(data.BootstrapConfigs) == 0 &&
+		len(data.PipelineSteps) == 0 &&
 		len(data.Logs) == 0
 }
 
@@ -313,6 +320,9 @@ func ensureSlices(data *domain.Data) {
 	}
 	if data.BootstrapConfigs == nil {
 		data.BootstrapConfigs = []domain.BootstrapConfig{}
+	}
+	if data.PipelineSteps == nil {
+		data.PipelineSteps = []domain.PipelineStepTemplate{}
 	}
 	if data.Logs == nil {
 		data.Logs = []domain.DeploymentLog{}

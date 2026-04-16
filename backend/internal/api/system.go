@@ -27,6 +27,7 @@ func (a *API) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 				"remoteTasks":      len(data.RemoteTasks),
 				"actionTemplates":  len(data.ActionTemplates),
 				"bootstrapConfigs": len(data.BootstrapConfigs),
+				"pipelineSteps":    len(data.PipelineSteps),
 				"logs":             len(data.Logs),
 			},
 			"persistedCollections": []string{
@@ -39,6 +40,7 @@ func (a *API) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 				"remoteTasks",
 				"actionTemplates",
 				"bootstrapConfigs",
+				"pipeline_steps",
 				"logs",
 			},
 		},

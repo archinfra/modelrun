@@ -321,6 +321,22 @@ type PipelineTemplateStep struct {
 	Details     []string `json:"details,omitempty"`
 }
 
+type PipelineStepTemplate struct {
+	ID              string   `json:"id"`
+	Framework       string   `json:"framework"`
+	StepID          string   `json:"stepId"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description"`
+	Optional        bool     `json:"optional,omitempty"`
+	AutoManaged     bool     `json:"autoManaged,omitempty"`
+	BuiltIn         bool     `json:"builtIn,omitempty"`
+	CommandTemplate string   `json:"commandTemplate"`
+	PreviewTemplate string   `json:"previewTemplate,omitempty"`
+	Details         []string `json:"details,omitempty"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
+}
+
 type ServerResource struct {
 	CPU struct {
 		Cores int     `json:"cores"`
@@ -352,16 +368,17 @@ type DeploymentLog struct {
 }
 
 type Data struct {
-	Projects         []Project          `json:"projects"`
-	Servers          []ServerConfig     `json:"servers"`
-	JumpHosts        []JumpHost         `json:"jumpHosts"`
-	Models           []ModelConfig      `json:"models"`
-	Deployments      []DeploymentConfig `json:"deployments"`
-	Tasks            []DeploymentTask   `json:"tasks"`
-	RemoteTasks      []RemoteTask       `json:"remoteTasks"`
-	ActionTemplates  []ActionTemplate   `json:"actionTemplates"`
-	BootstrapConfigs []BootstrapConfig  `json:"bootstrapConfigs"`
-	Logs             []DeploymentLog    `json:"logs"`
+	Projects         []Project              `json:"projects"`
+	Servers          []ServerConfig         `json:"servers"`
+	JumpHosts        []JumpHost             `json:"jumpHosts"`
+	Models           []ModelConfig          `json:"models"`
+	Deployments      []DeploymentConfig     `json:"deployments"`
+	Tasks            []DeploymentTask       `json:"tasks"`
+	RemoteTasks      []RemoteTask           `json:"remoteTasks"`
+	ActionTemplates  []ActionTemplate       `json:"actionTemplates"`
+	BootstrapConfigs []BootstrapConfig      `json:"bootstrapConfigs"`
+	PipelineSteps    []PipelineStepTemplate `json:"pipelineSteps"`
+	Logs             []DeploymentLog        `json:"logs"`
 }
 
 func NewID(prefix string) string {
