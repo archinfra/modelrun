@@ -180,7 +180,7 @@ export interface DeploymentStep {
   commandPreview?: string;
   optional?: boolean;
   autoManaged?: boolean;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
   progress: number;
   logs: string[];
   startTime?: string;

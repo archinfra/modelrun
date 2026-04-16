@@ -17,6 +17,8 @@ type Executor struct {
 	store     *store.Store
 	hub       *realtime.Hub
 	collector *collect.Collector
+	activeMu  sync.Mutex
+	active    map[string]map[string]func()
 }
 
 func NewExecutor(st *store.Store, hub *realtime.Hub) *Executor {
@@ -24,6 +26,7 @@ func NewExecutor(st *store.Store, hub *realtime.Hub) *Executor {
 		store:     st,
 		hub:       hub,
 		collector: collect.New(),
+		active:    map[string]map[string]func(){},
 	}
 }
 
@@ -94,6 +97,9 @@ func (e *Executor) Stop(deploymentID string) error {
 		return store.ErrNotFound
 	}
 
+	e.cancelDeploymentCommands(deploymentID)
+
+	var stoppedTasks []domain.DeploymentTask
 	err := e.store.Update(func(data *domain.Data) error {
 		idx := findDeployment(data.Deployments, deploymentID)
 		if idx < 0 {
@@ -104,6 +110,26 @@ func (e *Executor) Stop(deploymentID string) error {
 		for i := range data.Deployments[idx].Endpoints {
 			data.Deployments[idx].Endpoints[i].Status = "unknown"
 		}
+		now := domain.Now()
+		for i := range data.Tasks {
+			if data.Tasks[i].DeploymentID != deploymentID {
+				continue
+			}
+			for j := range data.Tasks[i].Steps {
+				switch data.Tasks[i].Steps[j].Status {
+				case "completed", "failed", "stopped":
+					continue
+				default:
+					data.Tasks[i].Steps[j].Status = "stopped"
+					if data.Tasks[i].Steps[j].StartTime == "" {
+						data.Tasks[i].Steps[j].StartTime = now
+					}
+					data.Tasks[i].Steps[j].EndTime = now
+				}
+			}
+			data.Tasks[i].OverallProgress = calculateOverall(data.Tasks[i].Steps)
+			stoppedTasks = append(stoppedTasks, data.Tasks[i])
+		}
 		return nil
 	})
 	if err != nil {
@@ -112,6 +138,13 @@ func (e *Executor) Stop(deploymentID string) error {
 
 	e.addLog(deploymentID, "", "", "warn", "deployment stopped")
 	stopped, _ := getDeployment(e.store.Snapshot().Deployments, deploymentID)
+	for _, task := range stoppedTasks {
+		for _, step := range task.Steps {
+			if step.Status == "stopped" {
+				e.broadcastProgress(task, step)
+			}
+		}
+	}
 	e.broadcastStatus(stopped)
 
 	go e.stopRuntime(deployment)
@@ -176,15 +209,20 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 			commandPreview = strings.TrimSpace(step.command)
 		}
 		e.appendStepOutput(deployment.ID, server.ID, step.step.ID, []string{"$ " + commandPreview})
-
-		_, err := e.collector.RunCommandStream(server, jump, step.command, func(item collect.CommandStreamLine) {
+		stopCh, releaseStop := e.registerCommand(deployment.ID)
+		_, err := e.collector.RunCommandStreamCancelable(server, jump, step.command, stopCh, func(item collect.CommandStreamLine) {
 			line := strings.TrimRight(item.Line, "\r")
 			if strings.TrimSpace(line) == "" {
 				return
 			}
 			e.appendStepOutput(deployment.ID, server.ID, step.step.ID, []string{line})
 		})
+		releaseStop()
 		if err != nil {
+			if errors.Is(err, collect.ErrCommandCancelled) && e.isStopped(deployment.ID) {
+				e.addLog(deployment.ID, server.ID, step.step.ID, "warn", "step stopped by user")
+				return nil
+			}
 			e.addLog(deployment.ID, server.ID, step.step.ID, "error", err.Error())
 			e.failStep(deployment.ID, server.ID, stepIndex, err)
 			return err
@@ -195,6 +233,43 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 	}
 
 	return nil
+}
+
+func (e *Executor) registerCommand(deploymentID string) (<-chan struct{}, func()) {
+	stopCh := make(chan struct{})
+	cancel := sync.OnceFunc(func() {
+		close(stopCh)
+	})
+	token := domain.NewID("cmd")
+
+	e.activeMu.Lock()
+	if e.active[deploymentID] == nil {
+		e.active[deploymentID] = map[string]func(){}
+	}
+	e.active[deploymentID][token] = cancel
+	e.activeMu.Unlock()
+
+	return stopCh, func() {
+		e.activeMu.Lock()
+		if entries, ok := e.active[deploymentID]; ok {
+			delete(entries, token)
+			if len(entries) == 0 {
+				delete(e.active, deploymentID)
+			}
+		}
+		e.activeMu.Unlock()
+	}
+}
+
+func (e *Executor) cancelDeploymentCommands(deploymentID string) {
+	e.activeMu.Lock()
+	entries := e.active[deploymentID]
+	delete(e.active, deploymentID)
+	e.activeMu.Unlock()
+
+	for _, cancel := range entries {
+		cancel()
+	}
 }
 
 func (e *Executor) stopRuntime(deployment domain.DeploymentConfig) {

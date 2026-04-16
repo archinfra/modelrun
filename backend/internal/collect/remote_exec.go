@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"modelrun/backend/internal/domain"
@@ -28,11 +29,17 @@ type CommandStreamLine struct {
 	Line   string
 }
 
+var ErrCommandCancelled = errors.New("command stopped by user")
+
 func (c *Collector) RunCommand(server domain.ServerConfig, jump *SSHConfig, command string) (CommandResult, error) {
 	return c.RunCommandStream(server, jump, command, nil)
 }
 
 func (c *Collector) RunCommandStream(server domain.ServerConfig, jump *SSHConfig, command string, onLine func(CommandStreamLine)) (CommandResult, error) {
+	return c.RunCommandStreamCancelable(server, jump, command, nil, onLine)
+}
+
+func (c *Collector) RunCommandStreamCancelable(server domain.ServerConfig, jump *SSHConfig, command string, stop <-chan struct{}, onLine func(CommandStreamLine)) (CommandResult, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return CommandResult{}, errors.New("command is required")
@@ -60,9 +67,32 @@ func (c *Collector) RunCommandStream(server domain.ServerConfig, jump *SSHConfig
 	if err != nil {
 		return CommandResult{}, err
 	}
-	defer closeFn()
+	var closeOnce sync.Once
+	safeClose := func() {
+		closeOnce.Do(closeFn)
+	}
+	defer safeClose()
 
-	return runCommand(client, command, onLine)
+	var cancelled atomic.Bool
+	finished := make(chan struct{})
+	if stop != nil {
+		go func() {
+			select {
+			case <-stop:
+				cancelled.Store(true)
+				safeClose()
+			case <-finished:
+			}
+		}()
+	}
+
+	result, err := runCommand(client, command, onLine)
+	close(finished)
+	if cancelled.Load() {
+		return result, ErrCommandCancelled
+	}
+
+	return result, err
 }
 
 func BuildScriptURLCommand(scriptURL, scriptArgs string) (string, error) {

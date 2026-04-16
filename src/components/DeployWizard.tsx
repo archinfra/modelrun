@@ -6,6 +6,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings2,
+  Square,
   Wand2,
   XCircle,
 } from 'lucide-react';
@@ -292,6 +293,10 @@ export const DeployWizard: React.FC = () => {
     () => models.find((item) => item.id === draft.selectedModelId),
     [draft.selectedModelId, models]
   );
+  const currentDeployment = useMemo(
+    () => deployments.find((item) => item.id === currentDeploymentId),
+    [currentDeploymentId, deployments]
+  );
 
   const loadBase = async () => {
     const [templateItems, modelItems, serverItems, deploymentItems] = await Promise.all([
@@ -435,6 +440,7 @@ export const DeployWizard: React.FC = () => {
       let status = 'pending';
       if (statuses.includes('failed')) status = 'failed';
       else if (statuses.includes('running')) status = 'running';
+      else if (statuses.includes('stopped')) status = 'stopped';
       else if (statuses.length && statuses.every((item) => item === 'completed')) status = 'completed';
       const progress = related.length
         ? Math.round(related.reduce((sum, item) => sum + (item.step?.progress || 0), 0) / related.length)
@@ -553,6 +559,26 @@ export const DeployWizard: React.FC = () => {
       setTasks(taskItems || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : '重新启动流水线失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const stopDeployment = async (deployment: DeploymentConfig) => {
+    setSubmitting(true);
+    setError('');
+    try {
+      await requestJSON(`/api/deployments/${deployment.id}/stop`, { method: 'POST' });
+      setCurrentDeploymentId(deployment.id);
+      setNotice(`已停止流水线 ${deployment.name}`);
+      const [deploymentItems, taskItems] = await Promise.all([
+        requestJSON<DeploymentConfig[]>('/api/deployments'),
+        requestJSON<DeploymentTask[]>(`/api/tasks?deploymentId=${encodeURIComponent(deployment.id)}`),
+      ]);
+      setDeployments(deploymentItems || []);
+      setTasks(taskItems || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '停止流水线失败');
     } finally {
       setSubmitting(false);
     }
@@ -682,6 +708,11 @@ export const DeployWizard: React.FC = () => {
           <p className="text-slate-500 mt-1">{currentProject?.name || '全局工作区'} | 同一页完成模板选择、Ray 组网、参数调整和失败后的重新执行。</p>
         </div>
         <div className="flex items-center gap-3">
+          {currentDeployment?.status === 'deploying' && (
+            <button onClick={() => void stopDeployment(currentDeployment)} disabled={submitting} className="px-4 py-2.5 bg-red-600 text-white rounded-xl hover:bg-red-700">
+              <span className="inline-flex items-center gap-2"><Square className="w-4 h-4" />停止执行</span>
+            </button>
+          )}
           <button onClick={() => { setLoading(true); loadBase().finally(() => setLoading(false)); }} className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-700 hover:bg-slate-50">
             <span className="inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />刷新</span>
           </button>
@@ -858,7 +889,7 @@ export const DeployWizard: React.FC = () => {
         <div className="space-y-6">
           <Section title="流水线看板">
             <div className="grid gap-4">
-              {stepCards.map(({ templateStep, related, status, progress }) => <div key={templateStep.id} className={`rounded-2xl border p-4 ${status === 'failed' ? 'border-red-200 bg-red-50' : status === 'running' ? 'border-blue-200 bg-blue-50' : status === 'completed' ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+              {stepCards.map(({ templateStep, related, status, progress }) => <div key={templateStep.id} className={`rounded-2xl border p-4 ${status === 'failed' ? 'border-red-200 bg-red-50' : status === 'running' ? 'border-blue-200 bg-blue-50' : status === 'completed' ? 'border-emerald-200 bg-emerald-50' : status === 'stopped' ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}>
                 <button type="button" onClick={() => setExpandedStepId(expandedStepId === templateStep.id ? null : templateStep.id)} className="w-full text-left">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -892,6 +923,7 @@ export const DeployWizard: React.FC = () => {
                   <span className="text-xs text-slate-600">{statusLabels[deployment.status]}</span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {deployment.status === 'deploying' && <button type="button" onClick={() => void stopDeployment(deployment)} disabled={submitting} className="px-3 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700"><span className="inline-flex items-center gap-2"><Square className="w-4 h-4" />停止</span></button>}
                   <button type="button" onClick={() => { setCurrentDeploymentId(deployment.id); setNotice(`正在查看部署 ${deployment.name} 的执行过程。`); setError(''); }} className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50">查看执行</button>
                   <button type="button" onClick={() => loadDeploymentIntoEditor(deployment)} className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50">载入编辑</button>
                   {deployment.status !== 'deploying' && <button type="button" onClick={() => void restartExistingDeployment(deployment)} disabled={submitting} className="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700">直接重跑</button>}
@@ -929,6 +961,7 @@ const SmallToggle: React.FC<{ active: boolean; onClick: () => void; label: strin
 const StatusIcon: React.FC<{ status: string }> = ({ status }) => {
   if (status === 'completed') return <CheckCircle2 className="w-5 h-5 text-emerald-600" />;
   if (status === 'running') return <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />;
+  if (status === 'stopped') return <Square className="w-5 h-5 text-amber-600" />;
   if (status === 'failed') return <XCircle className="w-5 h-5 text-red-600" />;
   return <CircleDashed className="w-5 h-5 text-slate-400" />;
 };
