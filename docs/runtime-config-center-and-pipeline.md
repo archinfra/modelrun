@@ -254,6 +254,35 @@ The `vllm-ascend` template:
 - starts `vllm serve` in the same managed runtime action
 - exposes OpenAI-compatible service verification
 
+### Remote model download path
+
+For remote model sources such as `modelscope` and `huggingface`, the configured `modelDir` is now treated as a **root directory**.
+
+The backend automatically appends a normalized model-id path below it.
+
+Example:
+
+- modelDir: `/data/models`
+- modelId: `Qwen/Qwen3.5-397B-A17B`
+
+Resolved host path:
+
+- `/data/models/qwen/qwen3.5-397b-a17b`
+
+This avoids per-deployment duplicate model directories and makes the actual host path predictable.
+
+### Revision behavior
+
+The backend no longer forces `revision=main` when the user did not specify a revision.
+
+Why:
+
+- some ModelScope models do not publish a `main` revision
+- forcing `main` causes valid models to fail download
+- when revision is omitted, the upstream CLI chooses the default valid revision itself
+
+So the deployment pipeline now lets ModelScope or Hugging Face decide the default revision unless a specific revision is explicitly configured.
+
 ### MindIE
 
 The `mindie` template:

@@ -60,9 +60,6 @@ func defaultModel(model *domain.ModelConfig) {
 	if model.Source == "" {
 		model.Source = "local"
 	}
-	if model.Revision == "" {
-		model.Revision = "main"
-	}
 	if model.Name == "" {
 		switch {
 		case model.ModelID != "":

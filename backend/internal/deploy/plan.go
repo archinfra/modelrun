@@ -194,6 +194,9 @@ func deploymentModelHostPath(deployment domain.DeploymentConfig, runtime domain.
 	if deployment.Model.Source == "local" && strings.TrimSpace(deployment.Model.LocalPath) != "" {
 		return strings.TrimSpace(deployment.Model.LocalPath)
 	}
+	if modelPath := remoteModelRelativePath(deployment.Model.ModelID); modelPath != "" {
+		return path.Join(strings.TrimRight(runtime.ModelDir, "/"), modelPath)
+	}
 	return path.Join(strings.TrimRight(runtime.ModelDir, "/"), deployment.ID)
 }
 
@@ -228,22 +231,24 @@ func buildPrepareModelCommand(deployment domain.DeploymentConfig, workDir, model
 			return "", fmt.Errorf("modelId is required for modelscope source")
 		}
 		privilegedPaths = append(privilegedPaths, modelHostPath)
+		revisionArg := optionalRevisionArg(deployment.Model.Revision)
 		commands = append(commands,
 			"mkdir -p "+shellQuote(modelHostPath),
 			"export PATH=\"$PATH:$HOME/.local/bin\"",
 			"command -v modelscope >/dev/null 2>&1 || { command -v python3 >/dev/null 2>&1 || { echo 'python3 is required to install modelscope' >&2; exit 127; }; python3 -m pip install --user modelscope; }",
-			"modelscope download --model "+shellQuote(deployment.Model.ModelID)+" --revision "+shellQuote(firstNonEmpty(deployment.Model.Revision, "main"))+" --local_dir "+shellQuote(modelHostPath),
+			"modelscope download --model "+shellQuote(deployment.Model.ModelID)+revisionArg+" --local_dir "+shellQuote(modelHostPath),
 		)
 	case "huggingface":
 		if strings.TrimSpace(deployment.Model.ModelID) == "" {
 			return "", fmt.Errorf("modelId is required for huggingface source")
 		}
 		privilegedPaths = append(privilegedPaths, modelHostPath)
+		revisionArg := optionalRevisionArg(deployment.Model.Revision)
 		commands = append(commands,
 			"mkdir -p "+shellQuote(modelHostPath),
 			"export PATH=\"$PATH:$HOME/.local/bin\"",
 			"command -v huggingface-cli >/dev/null 2>&1 || { command -v python3 >/dev/null 2>&1 || { echo 'python3 is required to install huggingface-cli' >&2; exit 127; }; python3 -m pip install --user 'huggingface_hub[cli]'; }",
-			"huggingface-cli download "+shellQuote(deployment.Model.ModelID)+" --revision "+shellQuote(firstNonEmpty(deployment.Model.Revision, "main"))+" --local-dir "+shellQuote(modelHostPath),
+			"huggingface-cli download "+shellQuote(deployment.Model.ModelID)+revisionArg+" --local-dir "+shellQuote(modelHostPath),
 		)
 	default:
 		return "", fmt.Errorf("unsupported model source %q", deployment.Model.Source)
@@ -654,12 +659,9 @@ func withDockerPrivileges(body string) string {
 		"return $?;",
 		"fi;",
 		"if command -v sudo >/dev/null 2>&1; then",
+		"sudo -n true >/dev/null 2>&1 || { echo 'docker command requires sudo privileges for the current SSH user, or the user must be added to the docker group.' >&2; return 1; };",
 		"sudo -n docker \"$@\";",
-		"status=$?;",
-		"if [ $status -ne 0 ]; then",
-		"echo 'docker command requires sudo privileges for the current SSH user, or the user must be added to the docker group.' >&2;",
-		"fi;",
-		"return $status;",
+		"return $?;",
 		"fi;",
 		"echo 'docker command requires sudo privileges because the current SSH user is not root and sudo is unavailable.' >&2;",
 		"return 1;",
@@ -707,18 +709,68 @@ func withPathPrivileges(body string, paths []string, failureHint string) string 
 		"return $?;",
 		"fi;",
 		"if command -v sudo >/dev/null 2>&1; then",
+		"sudo -n true >/dev/null 2>&1 || { echo " + shellQuote(failureHint) + " >&2; return 1; };",
 		"sudo -n sh -lc " + shellQuote(body) + ";",
-		"status=$?;",
-		"if [ $status -ne 0 ]; then",
-		"echo " + shellQuote(failureHint) + " >&2;",
-		"fi;",
-		"return $status;",
+		"return $?;",
 		"fi;",
 		"echo " + shellQuote(failureHint) + " >&2;",
 		"return 1;",
 		"};",
 		"run_with_optional_sudo",
 	}, " ")
+}
+
+func remoteModelRelativePath(modelID string) string {
+	modelID = strings.TrimSpace(strings.ReplaceAll(modelID, "\\", "/"))
+	if modelID == "" {
+		return ""
+	}
+	parts := strings.Split(modelID, "/")
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = sanitizePathSegment(part)
+		if part == "" {
+			continue
+		}
+		cleaned = append(cleaned, part)
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	return path.Join(cleaned...)
+}
+
+func sanitizePathSegment(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '.' || r == '_' || r == '-':
+			builder.WriteRune(r)
+		default:
+			builder.WriteByte('-')
+		}
+	}
+	out := strings.Trim(builder.String(), "-.")
+	if out == "" {
+		return "model"
+	}
+	return out
+}
+
+func optionalRevisionArg(revision string) string {
+	revision = strings.TrimSpace(revision)
+	if revision == "" || strings.EqualFold(revision, "main") {
+		return ""
+	}
+	return " --revision " + shellQuote(revision)
 }
 
 func joinShellArgs(values ...string) string {

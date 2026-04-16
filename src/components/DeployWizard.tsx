@@ -67,7 +67,7 @@ const createDraft = (): DraftState => ({
   framework: 'vllm-ascend',
   modelMode: 'existing',
   selectedModelId: '',
-  model: { source: 'modelscope', modelId: '', revision: 'main', localPath: '' },
+  model: { source: 'modelscope', modelId: '', revision: '', localPath: '' },
   dockerImage: '',
   dockerTag: '',
   apiPort: 8000,
@@ -695,7 +695,7 @@ export const DeployWizard: React.FC = () => {
               <Field label="缓存目录" value={draft.cacheDir} onChange={(value) => setDraft((current) => ({ ...current, cacheDir: value }))} />
               <Field label="共享缓存目录（可选）" value={draft.sharedCacheDir} onChange={(value) => setDraft((current) => ({ ...current, sharedCacheDir: value }))} />
             </div>
-            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">模型下载、目录创建和启动脚本写入时，系统会先判断当前 SSH 用户是否对目标目录有写权限；没有时会自动尝试 `sudo -n`。因此建议在这里显式配置一个可写目录，例如 `/data/models`、`/data/cache`。</div>
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">模型下载、目录创建和启动脚本写入时，系统会先判断当前 SSH 用户是否对目标目录有写权限；没有时会自动尝试 `sudo -n`。因此建议在这里显式配置一个可写目录，例如 `/data/models`、`/data/cache`。远端模型会自动下载到“模型目录/规范化模型 ID”，例如 `Qwen/Qwen3.5-397B-A17B` 会落到 `/data/models/qwen/qwen3.5-397b-a17b`。</div>
             <div className="mt-4">
               <label className="block text-sm font-medium text-slate-700 mb-1">额外启动参数（每行一个）</label>
               <textarea rows={4} value={draft.extraArgsText} onChange={(event) => setDraft((current) => ({ ...current, extraArgsText: event.target.value }))} className="w-full px-4 py-2 border border-slate-200 rounded-xl font-mono text-sm" />

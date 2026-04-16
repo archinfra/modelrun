@@ -10,9 +10,8 @@ import (
 func TestBuildPrepareModelCommandUsesOptionalSudoForManagedPaths(t *testing.T) {
 	deployment := domain.DeploymentConfig{
 		Model: domain.ModelConfig{
-			Source:   "modelscope",
-			ModelID:  "Qwen/Qwen3.5-32B",
-			Revision: "main",
+			Source:  "modelscope",
+			ModelID: "Qwen/Qwen3.5-32B",
 		},
 	}
 
@@ -36,6 +35,9 @@ func TestBuildPrepareModelCommandUsesOptionalSudoForManagedPaths(t *testing.T) {
 		if !strings.Contains(command, needle) {
 			t.Fatalf("expected command to contain %q, got %q", needle, command)
 		}
+	}
+	if strings.Contains(command, "--revision") {
+		t.Fatalf("expected modelscope download command to omit implicit revision, got %q", command)
 	}
 }
 
@@ -172,5 +174,42 @@ func TestBuildVerifyCommandUsesRayStatusForWorkerNode(t *testing.T) {
 	command := buildVerifyCommand(deployment, runtime, servers[1], servers)
 	if !strings.Contains(command, "run_docker exec 'modelrun-demo' bash -lc 'ray status >/dev/null'") {
 		t.Fatalf("expected worker verify command to use ray status in container, got %q", command)
+	}
+}
+
+func TestDeploymentModelHostPathUsesNormalizedModelID(t *testing.T) {
+	deployment := domain.DeploymentConfig{
+		Model: domain.ModelConfig{
+			Source:  "modelscope",
+			ModelID: "Qwen/Qwen3.5-397B-A17B",
+		},
+	}
+	runtime := domain.DeploymentRuntimeConfig{ModelDir: "/data/models"}
+
+	got := deploymentModelHostPath(deployment, runtime)
+	if got != "/data/models/qwen/qwen3.5-397b-a17b" {
+		t.Fatalf("deploymentModelHostPath() = %q, want %q", got, "/data/models/qwen/qwen3.5-397b-a17b")
+	}
+}
+
+func TestOptionalRevisionArg(t *testing.T) {
+	if got := optionalRevisionArg(""); got != "" {
+		t.Fatalf("optionalRevisionArg(\"\") = %q, want empty", got)
+	}
+	if got := optionalRevisionArg("main"); got != "" {
+		t.Fatalf("optionalRevisionArg(\"main\") = %q, want empty", got)
+	}
+	if got := optionalRevisionArg("master"); got != " --revision 'master'" {
+		t.Fatalf("optionalRevisionArg(\"master\") = %q", got)
+	}
+}
+
+func TestWithPathPrivilegesOnlyPrintsHintWhenSudoCheckFails(t *testing.T) {
+	command := withPathPrivileges("echo hello", []string{"/opt/modelrun"}, "permission hint")
+	if !strings.Contains(command, "sudo -n true >/dev/null 2>&1 || { echo 'permission hint' >&2; return 1; };") {
+		t.Fatalf("expected sudo availability check in command, got %q", command)
+	}
+	if strings.Contains(command, "status=$?; if [ $status -ne 0 ]; then") {
+		t.Fatalf("expected command to stop appending generic hint to all sudo failures, got %q", command)
 	}
 }
