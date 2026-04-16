@@ -30,6 +30,8 @@ type PipelineStepDraft = Partial<PipelineStepTemplate> & {
   detailsText: string;
 };
 
+type ConfigTab = 'actions' | 'bootstrap' | 'pipeline' | 'logs' | 'status';
+
 const emptyActionDraft = (): ActionTemplateDraft => ({
   name: '',
   description: '',
@@ -99,6 +101,7 @@ export const ConfigCenter: React.FC = () => {
   const [bootstraps, setBootstraps] = useState<BootstrapConfig[]>([]);
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStepTemplate[]>([]);
   const [logs, setLogs] = useState<DeploymentLog[]>([]);
+  const [activeTab, setActiveTab] = useState<ConfigTab>('actions');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -115,25 +118,28 @@ export const ConfigCenter: React.FC = () => {
   const [bootstrapDraft, setBootstrapDraft] = useState<BootstrapDraft>(emptyBootstrapDraft);
   const [pipelineStepDraft, setPipelineStepDraft] = useState<PipelineStepDraft>(emptyPipelineStepDraft);
 
-  const load = async () => {
-    const [status, actionItems, bootstrapItems, pipelineStepItems, logItems] = await Promise.all([
+  const loadBase = async () => {
+    const [status, actionItems, bootstrapItems, pipelineStepItems] = await Promise.all([
       requestJSON<SystemStatus>('/api/system/status'),
       requestJSON<ActionTemplate[]>('/api/action-templates'),
       requestJSON<BootstrapConfig[]>('/api/bootstrap-configs'),
       requestJSON<PipelineStepTemplate[]>('/api/pipeline-step-templates'),
-      requestJSON<DeploymentLog[]>('/api/logs?limit=200'),
     ]);
     setSystemStatus(status);
     setActions(Array.isArray(actionItems) ? actionItems : []);
     setBootstraps(Array.isArray(bootstrapItems) ? bootstrapItems : []);
     setPipelineSteps(Array.isArray(pipelineStepItems) ? pipelineStepItems : []);
+  };
+
+  const loadLogs = async () => {
+    const logItems = await requestJSON<DeploymentLog[]>('/api/logs?limit=200');
     setLogs(Array.isArray(logItems) ? logItems : []);
   };
 
   useEffect(() => {
     let active = true;
 
-    load()
+    loadBase()
       .then(() => {
         if (!active) return;
         setError('');
@@ -154,17 +160,32 @@ export const ConfigCenter: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== 'logs') return;
+    void loadLogs().catch(() => undefined);
     const timer = window.setInterval(() => {
-      requestJSON<DeploymentLog[]>('/api/logs?limit=200')
-        .then((items) => setLogs(Array.isArray(items) ? items : []))
-        .catch(() => undefined);
+      void loadLogs().catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [activeTab]);
 
   const actionOptions = useMemo(
     () => actions.map((action) => ({ value: action.id, label: action.name })),
     [actions]
+  );
+  const actionNameById = useMemo(
+    () => Object.fromEntries(actions.map((action) => [action.id, action.name])),
+    [actions]
+  );
+  const reversedLogs = useMemo(() => logs.slice().reverse(), [logs]);
+  const tabs: Array<{ id: ConfigTab; label: string; count?: number }> = useMemo(
+    () => [
+      { id: 'actions', label: '动作模板', count: actions.length },
+      { id: 'bootstrap', label: '服务初始化', count: bootstraps.length },
+      { id: 'pipeline', label: '流水线脚本', count: pipelineSteps.length },
+      { id: 'logs', label: '后端日志', count: logs.length },
+      { id: 'status', label: '数据状态' },
+    ],
+    [actions.length, bootstraps.length, logs.length, pipelineSteps.length]
   );
 
   const openCreateAction = () => {
@@ -250,7 +271,7 @@ export const ConfigCenter: React.FC = () => {
       }
 
       setShowActionModal(false);
-      await load();
+      await loadBase();
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存动作模板失败');
@@ -287,7 +308,7 @@ export const ConfigCenter: React.FC = () => {
       }
 
       setShowBootstrapModal(false);
-      await load();
+      await loadBase();
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存服务初始化项失败');
@@ -299,7 +320,7 @@ export const ConfigCenter: React.FC = () => {
     try {
       await requestJSON<void>(`/api/action-templates/${item.id}`, { method: 'DELETE' });
       setNotice(`已删除动作模板 ${item.name}`);
-      await load();
+      await loadBase();
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除动作模板失败');
@@ -311,7 +332,7 @@ export const ConfigCenter: React.FC = () => {
     try {
       await requestJSON<void>(`/api/bootstrap-configs/${item.id}`, { method: 'DELETE' });
       setNotice(`已删除服务初始化项 ${item.name}`);
-      await load();
+      await loadBase();
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除服务初始化项失败');
@@ -349,7 +370,7 @@ export const ConfigCenter: React.FC = () => {
       }
 
       setShowPipelineStepModal(false);
-      await load();
+      await loadBase();
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存流水线步骤脚本失败');
@@ -361,7 +382,7 @@ export const ConfigCenter: React.FC = () => {
     try {
       await requestJSON<void>(`/api/pipeline-step-templates/${item.id}`, { method: 'DELETE' });
       setNotice(`已删除流水线步骤脚本 ${item.framework}/${item.stepId}`);
-      await load();
+      await loadBase();
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除流水线步骤脚本失败');
@@ -378,7 +399,7 @@ export const ConfigCenter: React.FC = () => {
         <button
           onClick={() => {
             setLoading(true);
-            load()
+            Promise.all([loadBase(), activeTab === 'logs' ? loadLogs() : Promise.resolve()])
               .then(() => setError(''))
               .catch((err) => setError(err instanceof Error ? err.message : '刷新失败'))
               .finally(() => setLoading(false));
@@ -400,7 +421,25 @@ export const ConfigCenter: React.FC = () => {
         </div>
       )}
 
-      {systemStatus && (
+      <div className="flex flex-wrap gap-2">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm transition-colors ${
+              activeTab === tab.id
+                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <span>{tab.label}</span>
+            {typeof tab.count === 'number' ? <span className="rounded bg-white/80 px-2 py-0.5 text-xs">{tab.count}</span> : null}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'status' && systemStatus && (
         <section className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
           <div className="bg-white border border-slate-200 rounded-2xl p-6">
             <div className="flex items-center gap-3 mb-4">
@@ -466,7 +505,7 @@ export const ConfigCenter: React.FC = () => {
         </section>
       )}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      {activeTab === 'bootstrap' && <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Settings2 className="w-5 h-5 text-indigo-600" />
@@ -487,7 +526,7 @@ export const ConfigCenter: React.FC = () => {
         <div className="space-y-3">
           {bootstraps.map((item) => {
             const expanded = expandedBootstrapId === item.id;
-            const actionName = actions.find((action) => action.id === item.actionTemplateId)?.name || item.actionTemplateId;
+            const actionName = actionNameById[item.actionTemplateId] || item.actionTemplateId;
             return (
               <div key={item.id} className="border border-slate-200 rounded-2xl overflow-hidden">
                 <button
@@ -538,9 +577,9 @@ export const ConfigCenter: React.FC = () => {
             );
           })}
         </div>
-      </section>
+      </section>}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      {activeTab === 'pipeline' && <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <FileText className="w-5 h-5 text-violet-600" />
@@ -636,9 +675,9 @@ export const ConfigCenter: React.FC = () => {
             );
           })}
         </div>
-      </section>
+      </section>}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      {activeTab === 'actions' && <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Wrench className="w-5 h-5 text-blue-600" />
@@ -718,9 +757,9 @@ export const ConfigCenter: React.FC = () => {
             );
           })}
         </div>
-      </section>
+      </section>}
 
-      <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+      {activeTab === 'logs' && <section className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
         <div className="flex items-center gap-3">
           <Database className="w-5 h-5 text-slate-700" />
           <div>
@@ -732,7 +771,7 @@ export const ConfigCenter: React.FC = () => {
           {logs.length === 0 ? (
             <div className="text-slate-400">当前还没有后端日志。</div>
           ) : (
-            logs.slice().reverse().map((item, index) => (
+            reversedLogs.map((item, index) => (
               <div key={`${item.timestamp}-${index}`} className="break-all">
                 <span className="text-slate-500">[{item.timestamp}]</span>{' '}
                 <span className={item.level === 'error' ? 'text-red-300' : item.level === 'warn' ? 'text-amber-300' : 'text-emerald-300'}>
@@ -746,7 +785,7 @@ export const ConfigCenter: React.FC = () => {
             ))
           )}
         </div>
-      </section>
+      </section>}
 
       {showActionModal && (
         <Modal title={editingAction ? '编辑动作模板' : '新增动作模板'} onClose={() => setShowActionModal(false)}>
