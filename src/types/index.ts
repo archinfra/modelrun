@@ -112,13 +112,35 @@ export interface VLLMParams {
   numSpeculativeTokens?: number;
 }
 
+export interface DeploymentRayConfig {
+  enabled: boolean;
+  headServerId?: string;
+  nicName?: string;
+  port?: number;
+  dashboardPort?: number;
+  visibleDevices?: string;
+}
+
+export interface DeploymentRuntimeConfig {
+  containerName?: string;
+  workDir?: string;
+  modelDir?: string;
+  cacheDir?: string;
+  sharedCacheDir?: string;
+  enableAutoRestart?: boolean;
+  extraArgs?: string[];
+}
+
 export interface DeploymentConfig {
   id: string;
   name: string;
   status: 'draft' | 'deploying' | 'running' | 'failed' | 'stopped';
+  framework?: 'tei' | 'vllm-ascend' | 'mindie' | string;
   model: ModelConfig;
   docker: DockerConfig;
   vllm: VLLMParams;
+  ray?: DeploymentRayConfig;
+  runtime?: DeploymentRuntimeConfig;
   servers: string[];
   apiPort: number;
   createdAt: string;
@@ -146,6 +168,9 @@ export interface DeploymentStep {
   id: string;
   name: string;
   description: string;
+  commandPreview?: string;
+  optional?: boolean;
+  autoManaged?: boolean;
   status: 'pending' | 'running' | 'completed' | 'failed';
   progress: number;
   logs: string[];
@@ -213,6 +238,91 @@ export interface RemoteTaskPreset {
   name: string;
   description: string;
   fields?: RemoteTaskPresetField[];
+}
+
+export interface ActionTemplateField {
+  key: string;
+  label: string;
+  description?: string;
+  required?: boolean;
+  defaultValue?: string;
+  placeholder?: string;
+}
+
+export interface ActionTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category?: string;
+  builtIn?: boolean;
+  executionType: 'command' | 'script_url' | string;
+  commandTemplate?: string;
+  scriptUrl?: string;
+  scriptArgsTemplate?: string;
+  fields?: ActionTemplateField[];
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BootstrapConfig {
+  id: string;
+  name: string;
+  description: string;
+  serviceType: string;
+  category?: string;
+  builtIn?: boolean;
+  actionTemplateId: string;
+  defaultArgs?: Record<string, string>;
+  endpoint?: string;
+  port?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PipelineTemplateStep {
+  id: string;
+  name: string;
+  description: string;
+  optional?: boolean;
+  autoManaged?: boolean;
+  details?: string[];
+}
+
+export interface PipelineTemplate {
+  id: string;
+  name: string;
+  framework: 'tei' | 'vllm-ascend' | 'mindie' | string;
+  description: string;
+  supportsRay?: boolean;
+  defaultPort: number;
+  defaultDocker: DockerConfig;
+  defaultVllm: VLLMParams;
+  defaultRay: DeploymentRayConfig;
+  defaultRuntime: DeploymentRuntimeConfig;
+  steps: PipelineTemplateStep[];
+}
+
+export interface SystemStatus {
+  storage: {
+    driver: string;
+    path: string;
+    counts: Record<string, number>;
+    persistedCollections: string[];
+  };
+  mock: {
+    fakeConnectEnabled: boolean;
+    toggleEnv: string;
+    legacyHostPrefixMock: boolean;
+    description: string;
+  };
+  demoFeatures: Array<{
+    key: string;
+    name: string;
+    enabled: boolean;
+    persisted: boolean;
+    description: string;
+  }>;
 }
 
 export type WizardStep =

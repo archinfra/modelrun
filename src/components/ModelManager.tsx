@@ -1,174 +1,190 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Database, Layers, FileCode, HardDrive, ChevronRight, ChevronDown, Hash, Binary, Scale } from 'lucide-react';
-import { useAppStore } from '../store';
+import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  Binary,
+  ChevronDown,
+  ChevronRight,
+  Database,
+  FileCode,
+  HardDrive,
+  Info,
+  Layers,
+} from 'lucide-react';
+import { requestJSON } from '../lib/api';
 import { ModelConfig, ModelFile } from '../types';
 
 const formatBytes = (bytes: number) => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 };
 
-const mockModels: ModelConfig[] = [
-  {
-    id: '1',
-    name: 'Qwen2-72B-Instruct',
-    source: 'modelscope',
-    modelId: 'qwen/Qwen2-72B-Instruct',
-    revision: 'v1.0.0',
-    size: 144394567680,
-    format: 'safetensors',
-    parameters: '72B',
-    quantization: 'FP16',
-    files: [
-      { name: 'config.json', size: 2048, path: 'config.json' },
-      { name: 'model-00001-of-00037.safetensors', size: 3892314112, path: 'model-00001-of-00037.safetensors' },
-      { name: 'model-00002-of-00037.safetensors', size: 3892314112, path: 'model-00002-of-00037.safetensors' },
-      { name: 'tokenizer.json', size: 134217728, path: 'tokenizer.json' },
-    ]
-  },
-  {
-    id: '2',
-    name: 'Llama-3-8B-AWQ',
-    source: 'huggingface',
-    modelId: 'casperhansen/llama-3-8b-instruct-awq',
-    revision: 'main',
-    size: 5153960755,
-    format: 'awq',
-    parameters: '8B',
-    quantization: 'AWQ-4bit',
-    files: [
-      { name: 'model.safetensors', size: 5153960752, path: 'model.safetensors' },
-      { name: 'config.json', size: 1024, path: 'config.json' },
-    ]
-  }
-];
-
 export const ModelManager: React.FC = () => {
-  const { models, addModel } = useAppStore();
+  const [models, setModels] = useState<ModelConfig[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<ModelFile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const displayModels = models.length > 0 ? models : mockModels;
+  useEffect(() => {
+    let active = true;
+
+    requestJSON<ModelConfig[]>('/api/models')
+      .then((payload) => {
+        if (!active) return;
+        setModels(Array.isArray(payload) ? payload : []);
+        setError('');
+      })
+      .catch((err) => {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : 'Failed to load models');
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
-    <div className="p-6 font-mono">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Database className="w-6 h-6 text-cyan-400" />
-          <h2 className="text-xl font-bold text-slate-100">MODEL_REGISTRY</h2>
-          <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 text-xs rounded">{displayModels.length} ENTRIES</span>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Model Registry</h1>
+          <p className="text-slate-500 mt-1">这里只展示后端 SQLite 中已持久化的模型记录，不再回退到前端 mock 数据。</p>
         </div>
+        <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-sm font-medium">
+          {models.length} persisted
+        </span>
       </div>
 
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex gap-3">
+        <Info className="w-4 h-4 mt-0.5 shrink-0" />
+        <span>
+          模型列表和模型明细来自后端落库数据。当前只有 <code>/api/models/search</code> 的搜索目录仍是内置演示目录，
+          已创建模型本身是落到 SQLite 的。
+        </span>
+      </div>
+
+      {error && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+      )}
+
       <div className="grid gap-4">
-        {displayModels.map((model) => (
+        {models.map((model) => (
           <motion.div
             key={model.id}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="bg-slate-900/80 border border-slate-700 rounded-lg overflow-hidden"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white border border-slate-200 rounded-2xl overflow-hidden"
           >
-            <div
-              className="p-4 flex items-center justify-between cursor-pointer hover:bg-slate-800/50 transition-colors"
+            <button
+              type="button"
               onClick={() => setExpandedId(expandedId === model.id ? null : model.id)}
+              className="w-full p-5 flex items-start justify-between gap-4 hover:bg-slate-50 transition-colors"
             >
-              <div className="flex items-center gap-4">
-                <button className="text-slate-500">
-                  {expandedId === model.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                </button>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-cyan-400 font-semibold">{model.name}</span>
-                    <span className="px-1.5 py-0.5 bg-slate-700 text-slate-400 text-xs rounded">{model.source}</span>
+              <div className="flex items-start gap-4 text-left min-w-0">
+                <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-slate-900">{model.name}</span>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs">{model.source}</span>
                     {model.quantization && (
-                      <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-xs rounded">{model.quantization}</span>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs">{model.quantization}</span>
                     )}
                   </div>
-                  <div className="text-xs text-slate-500 mt-1 font-mono">{model.modelId || model.localPath}</div>
+                  <div className="text-sm text-slate-500 mt-1 break-all">{model.modelId || model.localPath || '-'}</div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-6 text-sm">
-                <div className="flex items-center gap-2 text-slate-400">
+              <div className="flex items-center gap-6 text-sm shrink-0">
+                <div className="flex items-center gap-2 text-slate-500">
                   <Layers className="w-4 h-4" />
-                  <span>{model.parameters}</span>
+                  <span>{model.parameters || '-'}</span>
                 </div>
-                <div className="flex items-center gap-2 text-slate-400">
+                <div className="flex items-center gap-2 text-slate-500">
                   <HardDrive className="w-4 h-4" />
                   <span>{formatBytes(model.size || 0)}</span>
                 </div>
-                <div className="flex items-center gap-2 text-slate-400">
+                <div className="flex items-center gap-2 text-slate-500">
                   <FileCode className="w-4 h-4" />
-                  <span>{model.format}</span>
+                  <span>{model.format || '-'}</span>
                 </div>
+                {expandedId === model.id ? (
+                  <ChevronDown className="w-5 h-5 text-slate-400" />
+                ) : (
+                  <ChevronRight className="w-5 h-5 text-slate-400" />
+                )}
               </div>
-            </div>
+            </button>
 
-            <AnimatePresence>
+            <AnimatePresence initial={false}>
               {expandedId === model.id && (
                 <motion.div
-                  initial={{ height: 0 }}
-                  animate={{ height: 'auto' }}
-                  exit={{ height: 0 }}
-                  className="border-t border-slate-700 bg-slate-950/50"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="border-t border-slate-200 bg-slate-50"
                 >
-                  <div className="p-4 grid grid-cols-2 gap-4">
+                  <div className="p-5 grid gap-5 lg:grid-cols-[1.2fr,0.8fr]">
                     <div>
-                      <h4 className="text-xs text-slate-500 mb-2 flex items-center gap-2">
-                        <Hash className="w-3 h-3" /> FILE_MANIFEST
-                      </h4>
-                      <div className="space-y-1">
-                        {model.files?.map((file) => (
-                          <div
-                            key={file.name}
-                            onClick={() => setSelectedFile(file)}
-                            className={`flex items-center justify-between px-3 py-2 rounded text-xs cursor-pointer transition-colors ${
-                              selectedFile?.name === file.name
-                                ? 'bg-cyan-500/20 text-cyan-400'
-                                : 'hover:bg-slate-800 text-slate-400'
-                            }`}
-                          >
-                            <span className="font-mono truncate">{file.name}</span>
-                            <span className="text-slate-500">{formatBytes(file.size)}</span>
-                          </div>
-                        ))}
-                      </div>
+                      <h3 className="text-sm font-medium text-slate-900 mb-3">File Manifest</h3>
+                      {model.files?.length ? (
+                        <div className="space-y-2">
+                          {model.files.map((file) => (
+                            <button
+                              type="button"
+                              key={`${model.id}-${file.path}`}
+                              onClick={() => setSelectedFile(file)}
+                              className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-left transition-colors ${
+                                selectedFile?.path === file.path
+                                  ? 'border-blue-200 bg-blue-50 text-blue-700'
+                                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="truncate text-sm">{file.path}</span>
+                              <span className="text-xs text-slate-500 shrink-0">{formatBytes(file.size)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
+                          没有扫描到文件清单。
+                        </div>
+                      )}
                     </div>
 
-                    <div>
-                      <h4 className="text-xs text-slate-500 mb-2 flex items-center gap-2">
-                        <Binary className="w-3 h-3" /> METADATA
-                      </h4>
-                      <div className="space-y-2 text-xs">
-                        <div className="flex justify-between py-1 border-b border-slate-800">
-                          <span className="text-slate-500">Format</span>
-                          <span className="text-slate-300">{model.format}</span>
-                        </div>
-                        <div className="flex justify-between py-1 border-b border-slate-800">
-                          <span className="text-slate-500">Parameters</span>
-                          <span className="text-slate-300">{model.parameters}</span>
-                        </div>
-                        <div className="flex justify-between py-1 border-b border-slate-800">
-                          <span className="text-slate-500">Quantization</span>
-                          <span className="text-slate-300">{model.quantization || 'None'}</span>
-                        </div>
-                        <div className="flex justify-between py-1 border-b border-slate-800">
-                          <span className="text-slate-500">Revision</span>
-                          <span className="text-slate-300">{model.revision}</span>
-                        </div>
-                        <div className="flex justify-between py-1 border-b border-slate-800">
-                          <span className="text-slate-500">Total Size</span>
-                          <span className="text-slate-300">{formatBytes(model.size || 0)}</span>
-                        </div>
-                        <div className="flex justify-between py-1">
-                          <span className="text-slate-500">File Count</span>
-                          <span className="text-slate-300">{model.files?.length || 0}</span>
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <h3 className="text-sm font-medium text-slate-900 mb-3 flex items-center gap-2">
+                          <Binary className="w-4 h-4 text-slate-500" />
+                          Metadata
+                        </h3>
+                        <div className="space-y-2 text-sm">
+                          <Row label="Source" value={model.source} />
+                          <Row label="Revision" value={model.revision || '-'} />
+                          <Row label="Format" value={model.format || '-'} />
+                          <Row label="Parameters" value={model.parameters || '-'} />
+                          <Row label="Quantization" value={model.quantization || '-'} />
+                          <Row label="Size" value={formatBytes(model.size || 0)} />
+                          <Row label="Files" value={`${model.files?.length || 0}`} />
                         </div>
                       </div>
+
+                      {selectedFile && (
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm">
+                          <div className="font-medium text-slate-900">{selectedFile.name}</div>
+                          <div className="text-slate-500 mt-1 break-all">{selectedFile.path}</div>
+                          <div className="text-slate-500 mt-2">{formatBytes(selectedFile.size)}</div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -177,6 +193,21 @@ export const ModelManager: React.FC = () => {
           </motion.div>
         ))}
       </div>
+
+      {!loading && models.length === 0 && !error && (
+        <div className="text-center py-16 bg-white rounded-2xl border border-dashed border-slate-200">
+          <Database className="w-14 h-14 text-slate-300 mx-auto mb-4" />
+          <p className="text-slate-600 font-medium">后端还没有持久化模型记录</p>
+          <p className="text-slate-500 mt-2 text-sm">添加模型后，这里显示的就是 SQLite 里的真实数据。</p>
+        </div>
+      )}
     </div>
   );
 };
+
+const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="flex items-center justify-between gap-3">
+    <span className="text-slate-500">{label}</span>
+    <span className="text-slate-900 text-right break-all">{value}</span>
+  </div>
+);

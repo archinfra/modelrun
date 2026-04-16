@@ -16,6 +16,7 @@ import {
   Settings,
   Terminal,
   X,
+  Wrench,
 } from 'lucide-react';
 import { useAppStore } from '../store';
 
@@ -28,8 +29,9 @@ const menuItems = [
   { path: '/projects', label: 'Projects', icon: FolderKanban },
   { path: '/models', label: 'Models', icon: Database },
   { path: '/servers', label: 'Servers', icon: Server },
+  { path: '/config', label: 'Config Center', icon: Wrench },
   { path: '/tasks', label: 'Task Dispatch', icon: Terminal },
-  { path: '/wizard', label: 'Deploy Wizard', icon: Rocket },
+  { path: '/wizard', label: 'Pipeline Console', icon: Rocket },
   { path: '/deployments', label: 'Deployments', icon: List },
 ];
 

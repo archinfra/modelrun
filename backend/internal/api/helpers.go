@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/domain"
 )
 
@@ -88,6 +89,9 @@ func defaultDeployment(deployment *domain.DeploymentConfig) {
 	if deployment.ID == "" {
 		deployment.ID = domain.NewID("deployment")
 	}
+	if deployment.Framework == "" {
+		deployment.Framework = "vllm-ascend"
+	}
 	if deployment.Name == "" {
 		deployment.Name = deployment.Model.Name
 		if deployment.Name == "" {
@@ -97,14 +101,42 @@ func defaultDeployment(deployment *domain.DeploymentConfig) {
 	if deployment.Status == "" {
 		deployment.Status = "draft"
 	}
-	if deployment.APIPort == 0 {
-		deployment.APIPort = 8000
-	}
 	if deployment.CreatedAt == "" {
 		deployment.CreatedAt = now
 	}
 	deployment.UpdatedAt = now
 	defaultModel(&deployment.Model)
+	if template, ok := deploy.LookupTemplate(deployment.Framework); ok {
+		if deployment.APIPort == 0 {
+			deployment.APIPort = template.DefaultPort
+		}
+		if deployment.Docker.Image == "" {
+			deployment.Docker.Image = template.DefaultDocker.Image
+		}
+		if deployment.Docker.Tag == "" {
+			deployment.Docker.Tag = template.DefaultDocker.Tag
+		}
+		if deployment.Docker.Network == "" {
+			deployment.Docker.Network = template.DefaultDocker.Network
+		}
+		if deployment.Docker.IPC == "" {
+			deployment.Docker.IPC = template.DefaultDocker.IPC
+		}
+		if deployment.Docker.ShmSize == "" {
+			deployment.Docker.ShmSize = template.DefaultDocker.ShmSize
+		}
+		if !deployment.Docker.Privileged && template.DefaultDocker.Privileged {
+			deployment.Docker.Privileged = true
+		}
+		if len(deployment.Docker.Volumes) == 0 && len(template.DefaultDocker.Volumes) > 0 {
+			deployment.Docker.Volumes = append([]domain.VolumeMount{}, template.DefaultDocker.Volumes...)
+		}
+		defaultRay(&deployment.Ray, template.DefaultRay)
+		defaultRuntime(&deployment.Runtime, template.DefaultRuntime)
+	}
+	if deployment.APIPort == 0 {
+		deployment.APIPort = 8000
+	}
 	defaultDocker(&deployment.Docker)
 	defaultVLLM(&deployment.VLLM)
 }
@@ -151,6 +183,36 @@ func defaultVLLM(params *domain.VLLMParams) {
 	}
 	if params.MaxNumBatchedTokens == 0 {
 		params.MaxNumBatchedTokens = 8192
+	}
+}
+
+func defaultRay(ray *domain.DeploymentRayConfig, defaults domain.DeploymentRayConfig) {
+	if ray.Port == 0 {
+		ray.Port = defaults.Port
+	}
+	if ray.DashboardPort == 0 {
+		ray.DashboardPort = defaults.DashboardPort
+	}
+}
+
+func defaultRuntime(runtime *domain.DeploymentRuntimeConfig, defaults domain.DeploymentRuntimeConfig) {
+	if runtime.WorkDir == "" {
+		runtime.WorkDir = defaults.WorkDir
+	}
+	if runtime.ModelDir == "" {
+		runtime.ModelDir = defaults.ModelDir
+	}
+	if runtime.CacheDir == "" {
+		runtime.CacheDir = defaults.CacheDir
+	}
+	if runtime.SharedCacheDir == "" {
+		runtime.SharedCacheDir = defaults.SharedCacheDir
+	}
+	if runtime.EnableAutoRestart || defaults.EnableAutoRestart {
+		runtime.EnableAutoRestart = true
+	}
+	if runtime.ExtraArgs == nil {
+		runtime.ExtraArgs = append([]string{}, defaults.ExtraArgs...)
 	}
 }
 

@@ -41,6 +41,7 @@ func (a *API) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/health", a.handleHealth)
+	mux.HandleFunc("/api/system/status", a.handleSystemStatus)
 
 	mux.HandleFunc("/api/projects", a.handleProjects)
 	mux.HandleFunc("/api/projects/", a.handleProject)
@@ -61,6 +62,11 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/remote-task-presets", a.handleRemoteTaskPresets)
 	mux.HandleFunc("/api/remote-tasks", a.handleRemoteTasks)
 	mux.HandleFunc("/api/remote-tasks/", a.handleRemoteTask)
+	mux.HandleFunc("/api/action-templates", a.handleActionTemplates)
+	mux.HandleFunc("/api/action-templates/", a.handleActionTemplate)
+	mux.HandleFunc("/api/bootstrap-configs", a.handleBootstrapConfigs)
+	mux.HandleFunc("/api/bootstrap-configs/", a.handleBootstrapConfig)
+	mux.HandleFunc("/api/pipeline-templates", a.handlePipelineTemplates)
 
 	mux.HandleFunc("/ws", a.hub.ServeHTTP)
 

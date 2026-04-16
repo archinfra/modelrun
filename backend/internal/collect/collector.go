@@ -70,7 +70,7 @@ func FromJumpHost(host domain.JumpHost) SSHConfig {
 }
 
 func IsMockServer(server domain.ServerConfig) bool {
-	return os.Getenv("MODELRUN_FAKE_CONNECT") == "1" || strings.HasPrefix(server.Host, "mock")
+	return os.Getenv("MODELRUN_FAKE_CONNECT") == "1"
 }
 
 func MockSnapshot(server domain.ServerConfig) Snapshot {

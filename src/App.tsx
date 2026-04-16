@@ -8,6 +8,7 @@ import { DeployWizard } from './components/DeployWizard';
 import { ModelManager } from './components/ModelManager';
 import { ProjectManager } from './components/ProjectManager';
 import { TaskDispatchManager } from './components/TaskDispatchManager';
+import { ConfigCenter } from './components/ConfigCenter';
 
 const App: React.FC = () => {
   return (
@@ -19,6 +20,7 @@ const App: React.FC = () => {
           <Route path="/projects" element={<ProjectManager />} />
           <Route path="/models" element={<ModelManager />} />
           <Route path="/servers" element={<ServerManager />} />
+          <Route path="/config" element={<ConfigCenter />} />
           <Route path="/tasks" element={<TaskDispatchManager />} />
           <Route path="/wizard" element={<DeployWizard />} />
           <Route path="/deployments" element={<DeploymentList />} />

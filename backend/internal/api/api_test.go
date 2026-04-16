@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,6 +147,17 @@ func TestListRemoteTasksEmpty(t *testing.T) {
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
+	previousFake := os.Getenv("MODELRUN_FAKE_CONNECT")
+	if err := os.Setenv("MODELRUN_FAKE_CONNECT", "1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if previousFake == "" {
+			_ = os.Unsetenv("MODELRUN_FAKE_CONNECT")
+			return
+		}
+		_ = os.Setenv("MODELRUN_FAKE_CONNECT", previousFake)
+	})
 
 	st, err := store.New(filepath.Join(t.TempDir(), "modelrun.db"))
 	if err != nil {

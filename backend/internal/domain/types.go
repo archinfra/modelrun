@@ -126,19 +126,41 @@ type VLLMParams struct {
 	NumSpeculativeTokens int     `json:"numSpeculativeTokens,omitempty"`
 }
 
+type DeploymentRayConfig struct {
+	Enabled        bool   `json:"enabled"`
+	HeadServerID   string `json:"headServerId,omitempty"`
+	NICName        string `json:"nicName,omitempty"`
+	Port           int    `json:"port,omitempty"`
+	DashboardPort  int    `json:"dashboardPort,omitempty"`
+	VisibleDevices string `json:"visibleDevices,omitempty"`
+}
+
+type DeploymentRuntimeConfig struct {
+	ContainerName     string   `json:"containerName,omitempty"`
+	WorkDir           string   `json:"workDir,omitempty"`
+	ModelDir          string   `json:"modelDir,omitempty"`
+	CacheDir          string   `json:"cacheDir,omitempty"`
+	SharedCacheDir    string   `json:"sharedCacheDir,omitempty"`
+	EnableAutoRestart bool     `json:"enableAutoRestart"`
+	ExtraArgs         []string `json:"extraArgs,omitempty"`
+}
+
 type DeploymentConfig struct {
-	ID        string               `json:"id"`
-	Name      string               `json:"name"`
-	Status    string               `json:"status"`
-	Model     ModelConfig          `json:"model"`
-	Docker    DockerConfig         `json:"docker"`
-	VLLM      VLLMParams           `json:"vllm"`
-	Servers   []string             `json:"servers"`
-	APIPort   int                  `json:"apiPort"`
-	CreatedAt string               `json:"createdAt"`
-	UpdatedAt string               `json:"updatedAt"`
-	Endpoints []DeploymentEndpoint `json:"endpoints,omitempty"`
-	Metrics   *DeploymentMetrics   `json:"metrics,omitempty"`
+	ID        string                  `json:"id"`
+	Name      string                  `json:"name"`
+	Status    string                  `json:"status"`
+	Framework string                  `json:"framework,omitempty"`
+	Model     ModelConfig             `json:"model"`
+	Docker    DockerConfig            `json:"docker"`
+	VLLM      VLLMParams              `json:"vllm"`
+	Ray       DeploymentRayConfig     `json:"ray,omitempty"`
+	Runtime   DeploymentRuntimeConfig `json:"runtime,omitempty"`
+	Servers   []string                `json:"servers"`
+	APIPort   int                     `json:"apiPort"`
+	CreatedAt string                  `json:"createdAt"`
+	UpdatedAt string                  `json:"updatedAt"`
+	Endpoints []DeploymentEndpoint    `json:"endpoints,omitempty"`
+	Metrics   *DeploymentMetrics      `json:"metrics,omitempty"`
 }
 
 type DeploymentEndpoint struct {
@@ -157,14 +179,17 @@ type DeploymentMetrics struct {
 }
 
 type DeploymentStep struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Status      string   `json:"status"`
-	Progress    int      `json:"progress"`
-	Logs        []string `json:"logs"`
-	StartTime   string   `json:"startTime,omitempty"`
-	EndTime     string   `json:"endTime,omitempty"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	CommandPreview string   `json:"commandPreview,omitempty"`
+	Optional       bool     `json:"optional,omitempty"`
+	AutoManaged    bool     `json:"autoManaged,omitempty"`
+	Status         string   `json:"status"`
+	Progress       int      `json:"progress"`
+	Logs           []string `json:"logs"`
+	StartTime      string   `json:"startTime,omitempty"`
+	EndTime        string   `json:"endTime,omitempty"`
 }
 
 type DeploymentTask struct {
@@ -224,6 +249,69 @@ type RemoteTaskPresetField struct {
 	Placeholder  string `json:"placeholder,omitempty"`
 }
 
+type ActionTemplate struct {
+	ID                 string                `json:"id"`
+	Name               string                `json:"name"`
+	Description        string                `json:"description"`
+	Category           string                `json:"category,omitempty"`
+	BuiltIn            bool                  `json:"builtIn,omitempty"`
+	ExecutionType      string                `json:"executionType"`
+	CommandTemplate    string                `json:"commandTemplate,omitempty"`
+	ScriptURL          string                `json:"scriptUrl,omitempty"`
+	ScriptArgsTemplate string                `json:"scriptArgsTemplate,omitempty"`
+	Fields             []ActionTemplateField `json:"fields,omitempty"`
+	Tags               []string              `json:"tags,omitempty"`
+	CreatedAt          string                `json:"createdAt"`
+	UpdatedAt          string                `json:"updatedAt"`
+}
+
+type ActionTemplateField struct {
+	Key          string `json:"key"`
+	Label        string `json:"label"`
+	Description  string `json:"description,omitempty"`
+	Required     bool   `json:"required,omitempty"`
+	DefaultValue string `json:"defaultValue,omitempty"`
+	Placeholder  string `json:"placeholder,omitempty"`
+}
+
+type BootstrapConfig struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Description      string            `json:"description"`
+	ServiceType      string            `json:"serviceType"`
+	Category         string            `json:"category,omitempty"`
+	BuiltIn          bool              `json:"builtIn,omitempty"`
+	ActionTemplateID string            `json:"actionTemplateId"`
+	DefaultArgs      map[string]string `json:"defaultArgs,omitempty"`
+	Endpoint         string            `json:"endpoint,omitempty"`
+	Port             int               `json:"port,omitempty"`
+	CreatedAt        string            `json:"createdAt"`
+	UpdatedAt        string            `json:"updatedAt"`
+}
+
+type PipelineTemplate struct {
+	ID             string                  `json:"id"`
+	Name           string                  `json:"name"`
+	Framework      string                  `json:"framework"`
+	Description    string                  `json:"description"`
+	SupportsRay    bool                    `json:"supportsRay,omitempty"`
+	DefaultPort    int                     `json:"defaultPort"`
+	DefaultDocker  DockerConfig            `json:"defaultDocker"`
+	DefaultVLLM    VLLMParams              `json:"defaultVllm"`
+	DefaultRay     DeploymentRayConfig     `json:"defaultRay"`
+	DefaultRuntime DeploymentRuntimeConfig `json:"defaultRuntime"`
+	Steps          []PipelineTemplateStep  `json:"steps"`
+}
+
+type PipelineTemplateStep struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Optional    bool     `json:"optional,omitempty"`
+	AutoManaged bool     `json:"autoManaged,omitempty"`
+	Details     []string `json:"details,omitempty"`
+}
+
 type ServerResource struct {
 	CPU struct {
 		Cores int     `json:"cores"`
@@ -255,14 +343,16 @@ type DeploymentLog struct {
 }
 
 type Data struct {
-	Projects    []Project          `json:"projects"`
-	Servers     []ServerConfig     `json:"servers"`
-	JumpHosts   []JumpHost         `json:"jumpHosts"`
-	Models      []ModelConfig      `json:"models"`
-	Deployments []DeploymentConfig `json:"deployments"`
-	Tasks       []DeploymentTask   `json:"tasks"`
-	RemoteTasks []RemoteTask       `json:"remoteTasks"`
-	Logs        []DeploymentLog    `json:"logs"`
+	Projects         []Project          `json:"projects"`
+	Servers          []ServerConfig     `json:"servers"`
+	JumpHosts        []JumpHost         `json:"jumpHosts"`
+	Models           []ModelConfig      `json:"models"`
+	Deployments      []DeploymentConfig `json:"deployments"`
+	Tasks            []DeploymentTask   `json:"tasks"`
+	RemoteTasks      []RemoteTask       `json:"remoteTasks"`
+	ActionTemplates  []ActionTemplate   `json:"actionTemplates"`
+	BootstrapConfigs []BootstrapConfig  `json:"bootstrapConfigs"`
+	Logs             []DeploymentLog    `json:"logs"`
 }
 
 func NewID(prefix string) string {

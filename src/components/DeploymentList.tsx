@@ -1,203 +1,128 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Play, Square, Trash2, Terminal, Activity,
-  Cpu, HardDrive, Zap, Globe, ChevronDown, ChevronRight,
-  Clock, AlertCircle, CheckCircle2, XCircle, Loader2
-} from 'lucide-react';
-import { useAppStore } from '../store';
-
-const StatusBadge = ({ status }: { status: string }) => {
-  const configs = {
-    running: { icon: Activity, color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30' },
-    deploying: { icon: Loader2, color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
-    failed: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30' },
-    stopped: { icon: Square, color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/30' },
-    draft: { icon: Clock, color: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/30' }
-  };
-  const cfg = configs[status as keyof typeof configs] || configs.draft;
-  const Icon = cfg.icon;
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium ${cfg.bg} ${cfg.color} border ${cfg.border}`}>
-      <Icon className={`w-3.5 h-3.5 ${status === 'deploying' ? 'animate-spin' : ''}`} />
-      {status.toUpperCase()}
-    </span>
-  );
-};
-
-const MetricCard = ({ label, value, unit, icon: Icon, color }: any) => (
-  <div className="bg-slate-900/50 border border-slate-700/50 rounded p-3">
-    <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
-      <Icon className={`w-3.5 h-3.5 ${color}`} />
-      {label}
-    </div>
-    <div className="text-slate-200 font-mono text-lg">
-      {value}<span className="text-slate-500 text-sm ml-1">{unit}</span>
-    </div>
-  </div>
-);
-
-const EndpointRow = ({ endpoint }: { endpoint: any }) => (
-  <div className="flex items-center justify-between py-2 px-3 bg-slate-800/30 rounded border border-slate-700/30">
-    <div className="flex items-center gap-3">
-      <div className={`w-2 h-2 rounded-full ${endpoint.status === 'healthy' ? 'bg-emerald-400' : 'bg-red-400'}`} />
-      <code className="text-xs text-slate-400 font-mono">{endpoint.serverId}</code>
-      <span className="text-xs text-slate-500">→</span>
-      <code className="text-xs text-blue-400 font-mono">{endpoint.url}</code>
-    </div>
-    <div className="flex items-center gap-4 text-xs">
-      <span className="text-slate-500">Latency: <span className="text-slate-300 font-mono">{endpoint.latency}ms</span></span>
-      <span className={`px-2 py-0.5 rounded ${endpoint.status === 'healthy' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
-        {endpoint.status}
-      </span>
-    </div>
-  </div>
-);
-
-const DeploymentCard = ({ deployment, isExpanded, onToggle }: any) => {
-  const { updateDeployment, removeDeployment } = useAppStore();
-
-  return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-slate-800/40 border border-slate-700/50 rounded-lg overflow-hidden"
-    >
-      <div
-        className="p-4 cursor-pointer hover:bg-slate-800/60 transition-colors"
-        onClick={onToggle}
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button className="text-slate-500 hover:text-slate-300">
-              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-            </button>
-            <div>
-              <div className="flex items-center gap-3">
-                <h3 className="text-slate-200 font-medium">{deployment.name}</h3>
-                <StatusBadge status={deployment.status} />
-              </div>
-              <div className="flex items-center gap-4 mt-1.5 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><Cpu className="w-3 h-3" /> {deployment.model.name}</span>
-                <span className="flex items-center gap-1"><Globe className="w-3 h-3" /> Port {deployment.apiPort}</span>
-                <span className="flex items-center gap-1"><HardDrive className="w-3 h-3" /> {deployment.servers.length} nodes</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {deployment.status === 'stopped' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); updateDeployment(deployment.id, { status: 'running' }); }}
-                className="p-2 rounded bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-              >
-                <Play className="w-4 h-4" />
-              </button>
-            )}
-            {deployment.status === 'running' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); updateDeployment(deployment.id, { status: 'stopped' }); }}
-                className="p-2 rounded bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors"
-              >
-                <Square className="w-4 h-4" />
-              </button>
-            )}
-            <button
-              onClick={(e) => { e.stopPropagation(); }}
-              className="p-2 rounded bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-200 transition-colors"
-            >
-              <Terminal className="w-4 h-4" />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); removeDeployment(deployment.id); }}
-              className="p-2 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0 }}
-            animate={{ height: 'auto' }}
-            exit={{ height: 0 }}
-            className="border-t border-slate-700/50"
-          >
-            <div className="p-4 space-y-4">
-              {deployment.metrics && (
-                <div className="grid grid-cols-4 gap-3">
-                  <MetricCard label="RPS" value={deployment.metrics.tokensPerSecond} unit="tok/s" icon={Zap} color="text-yellow-400" />
-                  <MetricCard label="Latency" value={deployment.metrics.avgLatency} unit="ms" icon={Activity} color="text-blue-400" />
-                  <MetricCard label="GPU" value={deployment.metrics.gpuUtilization} unit="%" icon={Cpu} color="text-emerald-400" />
-                  <MetricCard label="Memory" value={deployment.metrics.memoryUtilization} unit="%" icon={HardDrive} color="text-purple-400" />
-                </div>
-              )}
-
-              {deployment.endpoints && (
-                <div className="space-y-2">
-                  <h4 className="text-xs font-medium text-slate-500 uppercase tracking-wider">Endpoints</h4>
-                  {deployment.endpoints.map((ep: any) => <EndpointRow key={ep.serverId} endpoint={ep} />)}
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4 text-xs">
-                <div className="space-y-1">
-                  <span className="text-slate-500">Docker Image</span>
-                  <code className="text-slate-300 font-mono">{deployment.docker.image}:{deployment.docker.tag}</code>
-                </div>
-                <div className="space-y-1">
-                  <span className="text-slate-500">vLLM Config</span>
-                  <code className="text-slate-300 font-mono">TP={deployment.vllm.tensorParallelSize} PP={deployment.vllm.pipelineParallelSize}</code>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
-  );
-};
+import React, { useEffect, useState } from 'react';
+import { Activity, Play, RefreshCw, Square, Trash2 } from 'lucide-react';
+import { requestJSON } from '../lib/api';
+import { DeploymentConfig, DeploymentTask } from '../types';
 
 export const DeploymentList: React.FC = () => {
-  const { deployments } = useAppStore();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deployments, setDeployments] = useState<DeploymentConfig[]>([]);
+  const [tasks, setTasks] = useState<DeploymentTask[]>([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    const deploymentItems = await requestJSON<DeploymentConfig[]>('/api/deployments');
+    setDeployments(deploymentItems || []);
+    if (selectedId) {
+      const taskItems = await requestJSON<DeploymentTask[]>(`/api/tasks?deploymentId=${encodeURIComponent(selectedId)}`);
+      setTasks(taskItems || []);
+    }
+  };
+
+  useEffect(() => {
+    void load().catch((err) => setError(err instanceof Error ? err.message : 'Failed to load deployments'));
+    const timer = window.setInterval(() => void load().catch(() => undefined), 3000);
+    return () => window.clearInterval(timer);
+  }, [selectedId]);
+
+  const runAction = async (deployment: DeploymentConfig, action: 'start' | 'stop' | 'delete') => {
+    try {
+      if (action === 'delete') {
+        await requestJSON<void>(`/api/deployments/${deployment.id}`, { method: 'DELETE' });
+      } else {
+        await requestJSON(`/api/deployments/${deployment.id}/${action}`, { method: 'POST' });
+      }
+      if (selectedId === deployment.id && action === 'delete') {
+        setSelectedId('');
+        setTasks([]);
+      }
+      await load();
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Operation failed');
+    }
+  };
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-100">Deployments</h2>
-          <p className="text-sm text-slate-500 mt-1">{deployments.length} active deployments</p>
+          <h1 className="text-2xl font-bold text-slate-900">Deployments</h1>
+          <p className="text-slate-500 mt-1">展示后端真实部署记录和当前流水线任务状态。</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-400" /> Running</span>
-          <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-400" /> Deploying</span>
-          <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-red-400" /> Failed</span>
-        </div>
+        <button onClick={() => void load()} className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-700 hover:bg-slate-50">
+          <span className="inline-flex items-center gap-2"><RefreshCw className="w-4 h-4" />刷新</span>
+        </button>
       </div>
 
-      <div className="space-y-3">
-        {deployments.map((d) => (
-          <DeploymentCard
-            key={d.id}
-            deployment={d}
-            isExpanded={expandedId === d.id}
-            onToggle={() => setExpandedId(expandedId === d.id ? null : d.id)}
-          />
-        ))}
-      </div>
+      {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
-      {deployments.length === 0 && (
-        <div className="text-center py-16 border border-slate-700/50 border-dashed rounded-lg">
-          <Terminal className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-          <p className="text-slate-500">No deployments found</p>
-          <p className="text-xs text-slate-600 mt-1">Create a new deployment from the wizard</p>
-        </div>
-      )}
+      <div className="grid gap-6 xl:grid-cols-[0.95fr,1.05fr]">
+        <section className="bg-white border border-slate-200 rounded-2xl p-6">
+          <div className="space-y-3">
+            {deployments.map((deployment) => (
+              <button
+                key={deployment.id}
+                onClick={() => setSelectedId(deployment.id)}
+                className={`w-full rounded-2xl border p-4 text-left ${selectedId === deployment.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-slate-50 hover:bg-white'}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-slate-900">{deployment.name}</div>
+                    <div className="text-sm text-slate-500 mt-1">
+                      {deployment.framework} | {deployment.model.name} | {deployment.servers.length} servers
+                    </div>
+                  </div>
+                  <span className="text-xs text-slate-600">{deployment.status}</span>
+                </div>
+                <div className="flex gap-2 mt-4">
+                  <button type="button" onClick={(event) => { event.stopPropagation(); void runAction(deployment, 'start'); }} className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span className="inline-flex items-center gap-2"><Play className="w-4 h-4" />启动</span>
+                  </button>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); void runAction(deployment, 'stop'); }} className="px-3 py-2 rounded-xl bg-amber-50 text-amber-700 border border-amber-200">
+                    <span className="inline-flex items-center gap-2"><Square className="w-4 h-4" />停止</span>
+                  </button>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); void runAction(deployment, 'delete'); }} className="px-3 py-2 rounded-xl bg-red-50 text-red-700 border border-red-200">
+                    <span className="inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />删除</span>
+                  </button>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="bg-white border border-slate-200 rounded-2xl p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center">
+              <Activity className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Pipeline Tasks</h2>
+              <p className="text-sm text-slate-500">{selectedId ? `${tasks.length} server task(s)` : 'Select a deployment'}</p>
+            </div>
+          </div>
+          <div className="space-y-4">
+            {tasks.map((task) => (
+              <div key={task.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="font-medium text-slate-900">{task.serverId}</div>
+                <div className="text-sm text-slate-500 mt-1">{task.overallProgress}%</div>
+                <div className="mt-3 space-y-2">
+                  {task.steps.map((step) => (
+                    <div key={step.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-slate-900">{step.name}</span>
+                        <span className="text-xs text-slate-500">{step.status}</span>
+                      </div>
+                      {step.commandPreview && <pre className="mt-2 text-xs bg-slate-900 text-slate-100 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all">{step.commandPreview}</pre>}
+                      {step.logs?.length ? <pre className="mt-2 text-xs bg-slate-900 text-slate-100 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-48">{step.logs.join('\n')}</pre> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!tasks.length && <div className="text-sm text-slate-500">当前没有任务日志。</div>}
+          </div>
+        </section>
+      </div>
     </div>
   );
 };

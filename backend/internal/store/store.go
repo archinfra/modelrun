@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"modelrun/backend/internal/catalog"
 	"modelrun/backend/internal/domain"
 
 	_ "modernc.org/sqlite"
@@ -57,9 +58,19 @@ func New(path string) (*Store, error) {
 		}
 	}
 	ensureSlices(&data)
+	if catalog.EnsureDefaults(&data) {
+		if err := st.save(data); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
 	st.data = data
 
 	return st, nil
+}
+
+func (s *Store) Path() string {
+	return s.path
 }
 
 func (s *Store) Snapshot() domain.Data {
@@ -132,6 +143,12 @@ func (s *Store) load() (domain.Data, error) {
 	if data.RemoteTasks, err = loadCollection[domain.RemoteTask](s.db, "remote_tasks"); err != nil {
 		return data, err
 	}
+	if data.ActionTemplates, err = loadCollection[domain.ActionTemplate](s.db, "action_templates"); err != nil {
+		return data, err
+	}
+	if data.BootstrapConfigs, err = loadCollection[domain.BootstrapConfig](s.db, "bootstrap_configs"); err != nil {
+		return data, err
+	}
 	if data.Logs, err = loadCollection[domain.DeploymentLog](s.db, "logs"); err != nil {
 		return data, err
 	}
@@ -174,6 +191,12 @@ func (s *Store) save(data domain.Data) error {
 		return err
 	}
 	if err = saveCollection(tx, "remote_tasks", data.RemoteTasks, func(v domain.RemoteTask, _ int) string { return v.ID }); err != nil {
+		return err
+	}
+	if err = saveCollection(tx, "action_templates", data.ActionTemplates, func(v domain.ActionTemplate, _ int) string { return v.ID }); err != nil {
+		return err
+	}
+	if err = saveCollection(tx, "bootstrap_configs", data.BootstrapConfigs, func(v domain.BootstrapConfig, _ int) string { return v.ID }); err != nil {
 		return err
 	}
 	if err = saveCollection(tx, "logs", data.Logs, func(_ domain.DeploymentLog, i int) string { return fmt.Sprintf("%08d", i) }); err != nil {
@@ -258,6 +281,8 @@ func isEmpty(data domain.Data) bool {
 		len(data.Deployments) == 0 &&
 		len(data.Tasks) == 0 &&
 		len(data.RemoteTasks) == 0 &&
+		len(data.ActionTemplates) == 0 &&
+		len(data.BootstrapConfigs) == 0 &&
 		len(data.Logs) == 0
 }
 
@@ -282,6 +307,12 @@ func ensureSlices(data *domain.Data) {
 	}
 	if data.RemoteTasks == nil {
 		data.RemoteTasks = []domain.RemoteTask{}
+	}
+	if data.ActionTemplates == nil {
+		data.ActionTemplates = []domain.ActionTemplate{}
+	}
+	if data.BootstrapConfigs == nil {
+		data.BootstrapConfigs = []domain.BootstrapConfig{}
 	}
 	if data.Logs == nil {
 		data.Logs = []domain.DeploymentLog{}

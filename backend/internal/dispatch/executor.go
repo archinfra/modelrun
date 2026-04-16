@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"modelrun/backend/internal/catalog"
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
 	"modelrun/backend/internal/store"
@@ -36,7 +37,13 @@ func New(st *store.Store, collector *collect.Collector) *Executor {
 }
 
 func (e *Executor) Presets() []domain.RemoteTaskPreset {
-	return Presets()
+	snapshot := e.store.Snapshot()
+	items := make([]domain.RemoteTaskPreset, 0, len(snapshot.ActionTemplates))
+	for _, action := range snapshot.ActionTemplates {
+		items = append(items, catalog.ToRemoteTaskPreset(action))
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items
 }
 
 func (e *Executor) Create(req CreateTaskRequest) (domain.RemoteTask, error) {
@@ -47,14 +54,14 @@ func (e *Executor) Create(req CreateTaskRequest) (domain.RemoteTask, error) {
 		return domain.RemoteTask{}, err
 	}
 
-	commandPreview, err := resolveCommand(req)
+	commandPreview, err := e.resolveCommand(snapshot, req)
 	if err != nil {
 		return domain.RemoteTask{}, err
 	}
 
 	task := domain.RemoteTask{
 		ID:             domain.NewID("remote_task"),
-		Name:           defaultTaskName(req, servers),
+		Name:           e.defaultTaskName(snapshot, req, servers),
 		Description:    strings.TrimSpace(req.Description),
 		ProjectID:      strings.TrimSpace(req.ProjectID),
 		Scope:          normalizeScope(req.Scope, req.ProjectID, req.ServerIDs),
@@ -295,7 +302,7 @@ func resolveTargetServers(data domain.Data, scope, projectID string, serverIDs [
 	return servers, nil
 }
 
-func resolveCommand(req CreateTaskRequest) (string, error) {
+func (e *Executor) resolveCommand(snapshot domain.Data, req CreateTaskRequest) (string, error) {
 	switch normalizeExecutionType(req.ExecutionType) {
 	case "command":
 		command := strings.TrimSpace(req.Command)
@@ -306,17 +313,21 @@ func resolveCommand(req CreateTaskRequest) (string, error) {
 	case "script_url":
 		return collect.BuildScriptURLCommand(req.ScriptURL, req.ScriptArgs)
 	case "preset":
-		return BuildPresetCommand(req.PresetID, req.PresetArgs)
+		action, ok := catalog.LookupActionTemplate(snapshot.ActionTemplates, req.PresetID)
+		if !ok {
+			return "", fmt.Errorf("unknown preset %q", req.PresetID)
+		}
+		return catalog.BuildActionCommand(action, req.PresetArgs)
 	default:
 		return "", fmt.Errorf("unsupported executionType %q", req.ExecutionType)
 	}
 }
 
-func defaultTaskName(req CreateTaskRequest, servers []domain.ServerConfig) string {
+func (e *Executor) defaultTaskName(snapshot domain.Data, req CreateTaskRequest, servers []domain.ServerConfig) string {
 	switch normalizeExecutionType(req.ExecutionType) {
 	case "preset":
-		if preset, ok := LookupPreset(req.PresetID); ok {
-			return fmt.Sprintf("%s (%d)", preset.Name, len(servers))
+		if action, ok := catalog.LookupActionTemplate(snapshot.ActionTemplates, req.PresetID); ok {
+			return fmt.Sprintf("%s (%d)", action.Name, len(servers))
 		}
 	case "script_url":
 		return fmt.Sprintf("Run remote script (%d)", len(servers))
