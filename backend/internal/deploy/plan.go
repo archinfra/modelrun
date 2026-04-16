@@ -717,13 +717,11 @@ func buildDockerRunCommand(template domain.PipelineTemplate, deployment domain.D
 }
 
 func buildVerifyCommand(deployment domain.DeploymentConfig, runtime domain.DeploymentRuntimeConfig, server domain.ServerConfig, servers []domain.ServerConfig) string {
+	containerName := deploymentContainerName(deployment, runtime)
 	if strings.EqualFold(strings.TrimSpace(deployment.Framework), "vllm-ascend") && deployment.Ray.Enabled {
 		head := pickRayHeadServer(deployment, servers)
 		if head.ID != "" && head.ID != server.ID {
-			containerName := deploymentContainerName(deployment, runtime)
-			return withDockerPrivileges(
-				"run_docker exec " + shellQuote(containerName) + " bash -lc " + shellQuote("ray status >/dev/null"),
-			)
+			return buildWorkerRayVerifyCommand(containerName)
 		}
 	}
 
@@ -734,15 +732,65 @@ func buildVerifyCommand(deployment domain.DeploymentConfig, runtime domain.Deplo
 	default:
 		url = fmt.Sprintf("http://127.0.0.1:%d/v1/models", deployment.APIPort)
 	}
+	return buildHTTPVerifyCommand(containerName, url)
+}
+
+func buildWorkerRayVerifyCommand(containerName string) string {
+	return withDockerPrivileges(strings.Join([]string{
+		"attempt=0;",
+		"while [ \"$attempt\" -lt 20 ]; do",
+		"echo \"waiting for ray worker readiness in " + escapeForDoubleQuotedMessage(containerName) + " (attempt $((attempt + 1))/20)\";",
+		"run_docker inspect " + shellQuote(containerName) + " >/dev/null 2>&1 || {",
+		"echo 'container not found: " + escapeForSingleQuotedMessage(containerName) + "' >&2;",
+		"run_docker ps -a --format '{{.Names}}\\t{{.Status}}' >&2 || true;",
+		"exit 1;",
+		"};",
+		"run_docker exec " + shellQuote(containerName) + " bash -lc " + shellQuote("ray status >/dev/null") + " && exit 0;",
+		"attempt=$((attempt + 1));",
+		"sleep 3;",
+		"done;",
+		"echo 'ray worker verification timed out for container " + escapeForSingleQuotedMessage(containerName) + "' >&2;",
+		"run_docker ps -a --filter name=" + shellQuote("^/"+containerName+"$") + " >&2 || true;",
+		"run_docker logs --tail 80 " + shellQuote(containerName) + " >&2 || true;",
+		"exit 1;",
+	}, " "))
+}
+
+func buildHTTPVerifyCommand(containerName, url string) string {
 	return strings.Join([]string{
-		"if command -v curl >/dev/null 2>&1; then",
-		"curl -fsS --max-time 10 " + shellQuote(url) + " >/dev/null;",
-		"elif command -v wget >/dev/null 2>&1; then",
-		"wget -q -T 10 -O - " + shellQuote(url) + " >/dev/null;",
-		"else",
-		"echo 'curl or wget is required for runtime verification' >&2; exit 127;",
-		"fi",
+		withDockerPrivileges(strings.Join([]string{
+			"attempt=0;",
+			"while [ \"$attempt\" -lt 20 ]; do",
+			"echo \"waiting for service endpoint " + escapeForDoubleQuotedMessage(url) + " (attempt $((attempt + 1))/20)\";",
+			"run_docker inspect " + shellQuote(containerName) + " >/dev/null 2>&1 || {",
+			"echo 'container not found: " + escapeForSingleQuotedMessage(containerName) + "' >&2;",
+			"run_docker ps -a --format '{{.Names}}\\t{{.Status}}' >&2 || true;",
+			"exit 1;",
+			"};",
+			"if command -v curl >/dev/null 2>&1; then",
+			"curl -fsS --max-time 10 " + shellQuote(url) + " >/dev/null && exit 0;",
+			"elif command -v wget >/dev/null 2>&1; then",
+			"wget -q -T 10 -O - " + shellQuote(url) + " >/dev/null && exit 0;",
+			"else",
+			"echo 'curl or wget is required for runtime verification' >&2; exit 127;",
+			"fi;",
+			"attempt=$((attempt + 1));",
+			"sleep 3;",
+			"done;",
+			"echo 'service verification timed out for container " + escapeForSingleQuotedMessage(containerName) + "' >&2;",
+			"run_docker ps -a --filter name=" + shellQuote("^/"+containerName+"$") + " >&2 || true;",
+			"run_docker logs --tail 80 " + shellQuote(containerName) + " >&2 || true;",
+			"exit 1;",
+		}, " ")),
 	}, " ")
+}
+
+func escapeForDoubleQuotedMessage(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	value = strings.ReplaceAll(value, "$", "\\$")
+	value = strings.ReplaceAll(value, "`", "\\`")
+	return value
 }
 
 func templateStepDescription(template domain.PipelineTemplate, id string) string {

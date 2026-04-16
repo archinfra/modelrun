@@ -172,8 +172,36 @@ func TestBuildVerifyCommandUsesRayStatusForWorkerNode(t *testing.T) {
 	}
 
 	command := buildVerifyCommand(deployment, runtime, servers[1], servers)
-	if !strings.Contains(command, "run_docker exec 'modelrun-demo' bash -lc 'ray status >/dev/null'") {
-		t.Fatalf("expected worker verify command to use ray status in container, got %q", command)
+	for _, needle := range []string{
+		"run_docker inspect 'modelrun-demo' >/dev/null 2>&1",
+		"run_docker exec 'modelrun-demo' bash -lc 'ray status >/dev/null'",
+		"run_docker logs --tail 80 'modelrun-demo' >&2 || true",
+	} {
+		if !strings.Contains(command, needle) {
+			t.Fatalf("expected worker verify command to contain %q, got %q", needle, command)
+		}
+	}
+}
+
+func TestBuildVerifyCommandUsesContainerDiagnosticsForHTTPChecks(t *testing.T) {
+	deployment := domain.DeploymentConfig{
+		ID:        "deployment_test",
+		Name:      "demo",
+		Framework: "tei",
+		APIPort:   8080,
+	}
+	runtime := domain.DeploymentRuntimeConfig{ContainerName: "modelrun-demo"}
+	server := domain.ServerConfig{ID: "server-1", Host: "10.0.0.11"}
+
+	command := buildVerifyCommand(deployment, runtime, server, []domain.ServerConfig{server})
+	for _, needle := range []string{
+		"run_docker inspect 'modelrun-demo' >/dev/null 2>&1",
+		"curl -fsS --max-time 10 'http://127.0.0.1:8080/docs' >/dev/null && exit 0;",
+		"run_docker logs --tail 80 'modelrun-demo' >&2 || true",
+	} {
+		if !strings.Contains(command, needle) {
+			t.Fatalf("expected http verify command to contain %q, got %q", needle, command)
+		}
 	}
 }
 

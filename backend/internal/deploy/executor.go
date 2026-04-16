@@ -19,7 +19,18 @@ type Executor struct {
 	collector *collect.Collector
 	activeMu  sync.Mutex
 	active    map[string]map[string]func()
+	runtimeMu sync.RWMutex
+	runtime   map[string]*runtimeStepOutput
 }
+
+type runtimeStepOutput struct {
+	DeploymentID string
+	ServerID     string
+	StepID       string
+	Lines        []string
+}
+
+const maxRuntimeLinesPerStep = 2000
 
 func NewExecutor(st *store.Store, hub *realtime.Hub) *Executor {
 	return &Executor{
@@ -27,6 +38,7 @@ func NewExecutor(st *store.Store, hub *realtime.Hub) *Executor {
 		hub:       hub,
 		collector: collect.New(),
 		active:    map[string]map[string]func(){},
+		runtime:   map[string]*runtimeStepOutput{},
 	}
 }
 
@@ -83,6 +95,7 @@ func (e *Executor) Start(deploymentID string) ([]string, error) {
 		return nil, err
 	}
 
+	e.clearRuntimeLogs(deploymentID)
 	updated, _ := getDeployment(e.store.Snapshot().Deployments, deploymentID)
 	e.broadcastStatus(updated)
 	go e.run(deploymentID)
@@ -98,6 +111,7 @@ func (e *Executor) Stop(deploymentID string) error {
 	}
 
 	e.cancelDeploymentCommands(deploymentID)
+	drained := e.drainDeploymentRuntimeLogs(deploymentID)
 
 	var stoppedTasks []domain.DeploymentTask
 	err := e.store.Update(func(data *domain.Data) error {
@@ -116,6 +130,9 @@ func (e *Executor) Stop(deploymentID string) error {
 				continue
 			}
 			for j := range data.Tasks[i].Steps {
+				if lines := drained[taskStepKey(deploymentID, data.Tasks[i].ServerID, data.Tasks[i].Steps[j].ID)]; len(lines) > 0 {
+					data.Tasks[i].Steps[j].Logs = append(data.Tasks[i].Steps[j].Logs, lines...)
+				}
 				switch data.Tasks[i].Steps[j].Status {
 				case "completed", "failed", "stopped":
 					continue
@@ -224,12 +241,12 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 				return nil
 			}
 			e.addLog(deployment.ID, server.ID, step.step.ID, "error", err.Error())
-			e.failStep(deployment.ID, server.ID, stepIndex, err)
+			e.failStep(deployment.ID, server.ID, step.step.ID, stepIndex, err)
 			return err
 		}
 
-		e.completeStep(deployment.ID, server.ID, stepIndex)
 		e.addLog(deployment.ID, server.ID, step.step.ID, "info", "completed "+step.step.Name)
+		e.completeStep(deployment.ID, server.ID, step.step.ID, stepIndex)
 	}
 
 	return nil
@@ -315,7 +332,8 @@ func (e *Executor) startStep(deploymentID, serverID string, stepIndex int) {
 	})
 }
 
-func (e *Executor) completeStep(deploymentID, serverID string, stepIndex int) {
+func (e *Executor) completeStep(deploymentID, serverID, stepID string, stepIndex int) {
+	drained := e.drainRuntimeStepLogs(deploymentID, serverID, stepID)
 	now := domain.Now()
 	_ = e.store.Update(func(data *domain.Data) error {
 		taskIdx := findTask(data.Tasks, deploymentID, serverID)
@@ -324,6 +342,7 @@ func (e *Executor) completeStep(deploymentID, serverID string, stepIndex int) {
 		}
 
 		task := &data.Tasks[taskIdx]
+		task.Steps[stepIndex].Logs = append(task.Steps[stepIndex].Logs, drained...)
 		task.Steps[stepIndex].Status = "completed"
 		task.Steps[stepIndex].Progress = 100
 		task.Steps[stepIndex].EndTime = now
@@ -334,7 +353,8 @@ func (e *Executor) completeStep(deploymentID, serverID string, stepIndex int) {
 	})
 }
 
-func (e *Executor) failStep(deploymentID, serverID string, stepIndex int, stepErr error) {
+func (e *Executor) failStep(deploymentID, serverID, stepID string, stepIndex int, stepErr error) {
+	drained := e.drainRuntimeStepLogs(deploymentID, serverID, stepID)
 	now := domain.Now()
 	_ = e.store.Update(func(data *domain.Data) error {
 		taskIdx := findTask(data.Tasks, deploymentID, serverID)
@@ -343,11 +363,12 @@ func (e *Executor) failStep(deploymentID, serverID string, stepIndex int, stepEr
 		}
 
 		task := &data.Tasks[taskIdx]
+		task.Steps[stepIndex].Logs = append(task.Steps[stepIndex].Logs, drained...)
 		task.Steps[stepIndex].Status = "failed"
 		task.Steps[stepIndex].Progress = 100
 		task.Steps[stepIndex].EndTime = now
 		task.OverallProgress = calculateOverall(task.Steps)
-		if stepErr != nil {
+		if stepErr != nil && len(drained) == 0 {
 			task.Steps[stepIndex].Logs = append(task.Steps[stepIndex].Logs, stepErr.Error())
 		}
 		e.broadcastProgress(*task, task.Steps[stepIndex])
@@ -370,21 +391,7 @@ func (e *Executor) appendStepOutput(deploymentID, serverID, stepID string, lines
 	if len(filtered) == 0 {
 		return
 	}
-
-	_ = e.store.Update(func(data *domain.Data) error {
-		taskIdx := findTask(data.Tasks, deploymentID, serverID)
-		if taskIdx < 0 {
-			return nil
-		}
-		for i := range data.Tasks[taskIdx].Steps {
-			if data.Tasks[taskIdx].Steps[i].ID != stepID {
-				continue
-			}
-			data.Tasks[taskIdx].Steps[i].Logs = append(data.Tasks[taskIdx].Steps[i].Logs, filtered...)
-			break
-		}
-		return nil
-	})
+	e.appendRuntimeStepLogs(deploymentID, serverID, stepID, filtered)
 
 	e.hub.Broadcast(realtime.Message{
 		Type:         "step_log",
@@ -395,6 +402,84 @@ func (e *Executor) appendStepOutput(deploymentID, serverID, stepID string, lines
 			"lines":    filtered,
 		},
 	})
+}
+
+func (e *Executor) appendRuntimeStepLogs(deploymentID, serverID, stepID string, lines []string) {
+	key := taskStepKey(deploymentID, serverID, stepID)
+	e.runtimeMu.Lock()
+	entry := e.runtime[key]
+	if entry == nil {
+		entry = &runtimeStepOutput{
+			DeploymentID: deploymentID,
+			ServerID:     serverID,
+			StepID:       stepID,
+		}
+		e.runtime[key] = entry
+	}
+	entry.Lines = append(entry.Lines, lines...)
+	if len(entry.Lines) > maxRuntimeLinesPerStep {
+		entry.Lines = append([]string{}, entry.Lines[len(entry.Lines)-maxRuntimeLinesPerStep:]...)
+	}
+	e.runtimeMu.Unlock()
+}
+
+func (e *Executor) drainRuntimeStepLogs(deploymentID, serverID, stepID string) []string {
+	key := taskStepKey(deploymentID, serverID, stepID)
+	e.runtimeMu.Lock()
+	defer e.runtimeMu.Unlock()
+	entry := e.runtime[key]
+	if entry == nil {
+		return nil
+	}
+	delete(e.runtime, key)
+	return append([]string{}, entry.Lines...)
+}
+
+func (e *Executor) drainDeploymentRuntimeLogs(deploymentID string) map[string][]string {
+	e.runtimeMu.Lock()
+	defer e.runtimeMu.Unlock()
+	drained := map[string][]string{}
+	for key, entry := range e.runtime {
+		if entry.DeploymentID != deploymentID {
+			continue
+		}
+		drained[key] = append([]string{}, entry.Lines...)
+		delete(e.runtime, key)
+	}
+	return drained
+}
+
+func (e *Executor) clearRuntimeLogs(deploymentID string) {
+	e.runtimeMu.Lock()
+	defer e.runtimeMu.Unlock()
+	for key, entry := range e.runtime {
+		if entry.DeploymentID == deploymentID {
+			delete(e.runtime, key)
+		}
+	}
+}
+
+func (e *Executor) HydrateTasks(tasks []domain.DeploymentTask) []domain.DeploymentTask {
+	e.runtimeMu.RLock()
+	defer e.runtimeMu.RUnlock()
+
+	out := make([]domain.DeploymentTask, 0, len(tasks))
+	for _, task := range tasks {
+		copyTask := task
+		copyTask.Steps = append([]domain.DeploymentStep(nil), task.Steps...)
+		for i := range copyTask.Steps {
+			copyTask.Steps[i].Logs = append([]string{}, task.Steps[i].Logs...)
+			if entry := e.runtime[taskStepKey(task.DeploymentID, task.ServerID, copyTask.Steps[i].ID)]; entry != nil {
+				copyTask.Steps[i].Logs = append(copyTask.Steps[i].Logs, entry.Lines...)
+			}
+		}
+		out = append(out, copyTask)
+	}
+	return out
+}
+
+func taskStepKey(deploymentID, serverID, stepID string) string {
+	return deploymentID + "|" + serverID + "|" + stepID
 }
 
 func (e *Executor) addLog(deploymentID, serverID, stepID, level, message string) {

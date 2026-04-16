@@ -23,6 +23,7 @@ func (a *API) handleTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	tasks = a.executor.HydrateTasks(tasks)
 
 	writeJSON(w, http.StatusOK, tasks)
 }
@@ -46,7 +47,7 @@ func (a *API) handleTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, data.Tasks[idx])
+	writeJSON(w, http.StatusOK, a.executor.HydrateTasks([]domain.DeploymentTask{data.Tasks[idx]})[0])
 }
 
 func findTaskByID(tasks []domain.DeploymentTask, id string) int {
