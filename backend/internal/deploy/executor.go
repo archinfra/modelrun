@@ -429,8 +429,16 @@ func deploymentServers(all []domain.ServerConfig, ids []string) ([]domain.Server
 }
 
 func makeEndpoints(deployment domain.DeploymentConfig, servers []domain.ServerConfig) []domain.DeploymentEndpoint {
-	endpoints := make([]domain.DeploymentEndpoint, 0, len(deployment.Servers))
-	for _, serverID := range deployment.Servers {
+	serverIDs := deployment.Servers
+	if strings.EqualFold(strings.TrimSpace(deployment.Framework), "vllm-ascend") && deployment.Ray.Enabled {
+		head := pickRayHeadServer(deployment, servers)
+		if head.ID != "" {
+			serverIDs = []string{head.ID}
+		}
+	}
+
+	endpoints := make([]domain.DeploymentEndpoint, 0, len(serverIDs))
+	for _, serverID := range serverIDs {
 		host := serverID
 		if server, ok := getServer(servers, serverID); ok && server.Host != "" {
 			host = server.Host

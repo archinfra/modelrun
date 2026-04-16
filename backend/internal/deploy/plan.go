@@ -42,8 +42,8 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 		{
 			step: domain.DeploymentStep{
 				ID:             "prepare_model",
-				Name:           "Prepare model",
-				Description:    "Download the model to the managed path or validate the local model directory.",
+				Name:           "准备模型",
+				Description:    "下载模型到托管目录，或校验目标服务器上的本地模型目录。",
 				CommandPreview: prepareCommand,
 				Status:         "pending",
 				Logs:           []string{},
@@ -53,8 +53,8 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 		{
 			step: domain.DeploymentStep{
 				ID:             "pull_image",
-				Name:           "Pull runtime image",
-				Description:    "Pull the configured container image on the target server.",
+				Name:           "拉取镜像",
+				Description:    "在目标服务器上拉取当前配置的运行时镜像。",
 				CommandPreview: withDockerPrivileges("run_docker pull " + shellQuote(imageRef)),
 				Status:         "pending",
 				Logs:           []string{},
@@ -64,7 +64,7 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 		{
 			step: domain.DeploymentStep{
 				ID:             "launch_runtime",
-				Name:           "Launch runtime",
+				Name:           "启动服务",
 				Description:    templateStepDescription(template, "launch_runtime"),
 				CommandPreview: launchCommand,
 				AutoManaged:    true,
@@ -76,14 +76,14 @@ func buildPlan(deployment domain.DeploymentConfig, server domain.ServerConfig, s
 		{
 			step: domain.DeploymentStep{
 				ID:             "verify_service",
-				Name:           "Verify service",
+				Name:           "验证服务",
 				Description:    templateStepDescription(template, "verify_service"),
-				CommandPreview: buildVerifyCommand(deployment),
+				CommandPreview: buildVerifyCommand(deployment, runtime, server, servers),
 				AutoManaged:    true,
 				Status:         "pending",
 				Logs:           []string{},
 			},
-			command: buildVerifyCommand(deployment),
+			command: buildVerifyCommand(deployment, runtime, server, servers),
 		},
 	}
 
@@ -317,6 +317,11 @@ func buildTEILaunchScript(deployment domain.DeploymentConfig) string {
 }
 
 func buildVLLMAscendLaunchScript(deployment domain.DeploymentConfig, server domain.ServerConfig, servers []domain.ServerConfig) string {
+	override := serverOverrideFor(deployment, server.ID)
+	nodeIP := effectiveRayNodeIP(server, override)
+	head := pickRayHeadServer(deployment, servers)
+	headNodeIP := effectiveRayNodeIP(head, serverOverrideFor(deployment, head.ID))
+
 	lines := []string{
 		"#!/usr/bin/env bash",
 		"set -euo pipefail",
@@ -324,30 +329,58 @@ func buildVLLMAscendLaunchScript(deployment domain.DeploymentConfig, server doma
 		"export HUGGINGFACE_HUB_CACHE=/opt/modelrun/cache",
 		"export PYTHONUNBUFFERED=1",
 	}
-	if value := strings.TrimSpace(deployment.Ray.VisibleDevices); value != "" {
+	if value := effectiveVisibleDevices(deployment, override); value != "" {
 		lines = append(lines, "export ASCEND_RT_VISIBLE_DEVICES="+shellQuote(value))
+	}
+	if nodeIP != "" {
+		lines = append(lines, "export HCCL_IF_IP="+shellQuote(nodeIP))
 	}
 	if value := strings.TrimSpace(deployment.Ray.NICName); value != "" {
 		lines = append(lines,
+			"export HCCL_SOCKET_IFNAME="+shellQuote(value),
 			"export GLOO_SOCKET_IFNAME="+shellQuote(value),
 			"export TP_SOCKET_IFNAME="+shellQuote(value),
 		)
 	}
 	if deployment.Ray.Enabled {
 		lines = append(lines, "ray stop >/dev/null 2>&1 || true")
-		head := pickRayHeadServer(deployment, servers)
 		if head.ID == server.ID {
+			rayArgs := []string{
+				"ray", "start",
+				"--head",
+				"--port", strconv.Itoa(defaultRayPort(deployment.Ray.Port)),
+				"--dashboard-host", "0.0.0.0",
+				"--dashboard-port", strconv.Itoa(defaultDashboardPort(deployment.Ray.DashboardPort)),
+			}
+			if nodeIP != "" {
+				rayArgs = append(rayArgs, "--node-ip-address", nodeIP)
+			}
+			if len(override.RayStartArgs) > 0 {
+				rayArgs = append(rayArgs, override.RayStartArgs...)
+			}
 			lines = append(lines,
-				"ray start --head --port "+strconv.Itoa(defaultRayPort(deployment.Ray.Port))+" --dashboard-host 0.0.0.0 --dashboard-port "+strconv.Itoa(defaultDashboardPort(deployment.Ray.DashboardPort)),
+				joinShellArgs(rayArgs...),
+				"export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1",
 				"export RAY_ADDRESS=auto",
 			)
 		} else {
+			rayArgs := []string{
+				"ray", "start",
+				"--address", fmt.Sprintf("%s:%d", firstNonEmpty(headNodeIP, "127.0.0.1"), defaultRayPort(deployment.Ray.Port)),
+			}
+			if nodeIP != "" {
+				rayArgs = append(rayArgs, "--node-ip-address", nodeIP)
+			}
+			if len(override.RayStartArgs) > 0 {
+				rayArgs = append(rayArgs, override.RayStartArgs...)
+			}
 			lines = append(lines,
-				"ray start --address "+shellQuote(fmt.Sprintf("%s:%d", firstNonEmpty(head.Host, "127.0.0.1"), defaultRayPort(deployment.Ray.Port))),
-				"export RAY_ADDRESS="+shellQuote(fmt.Sprintf("ray://%s:%d", firstNonEmpty(head.Host, "127.0.0.1"), defaultRayPort(deployment.Ray.Port))),
+				joinShellArgs(rayArgs...),
+				"export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1",
+				"exec tail -f /dev/null",
 			)
+			return strings.Join(lines, "\n")
 		}
-		lines = append(lines, "export RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1")
 	}
 
 	args := []string{
@@ -362,11 +395,17 @@ func buildVLLMAscendLaunchScript(deployment domain.DeploymentConfig, server doma
 		"--max-num-seqs", strconv.Itoa(maxInt(1, deployment.VLLM.MaxNumSeqs)),
 		"--max-num-batched-tokens", strconv.Itoa(maxInt(1, deployment.VLLM.MaxNumBatchedTokens)),
 	}
+	if deployment.Ray.Enabled {
+		args = append(args, "--distributed-executor-backend", "ray")
+	}
 	if deployment.VLLM.TrustRemoteCode {
 		args = append(args, "--trust-remote-code")
 	}
 	if deployment.VLLM.EnablePrefixCaching {
 		args = append(args, "--enable-prefix-caching")
+	}
+	if deployment.VLLM.EnableExpertParallel {
+		args = append(args, "--enable-expert-parallel")
 	}
 	if deployment.VLLM.Quantization != "" {
 		args = append(args, "--quantization", deployment.VLLM.Quantization)
@@ -494,7 +533,17 @@ func buildDockerRunCommand(template domain.PipelineTemplate, deployment domain.D
 	return withDockerPrivileges(strings.Join(runParts, " "))
 }
 
-func buildVerifyCommand(deployment domain.DeploymentConfig) string {
+func buildVerifyCommand(deployment domain.DeploymentConfig, runtime domain.DeploymentRuntimeConfig, server domain.ServerConfig, servers []domain.ServerConfig) string {
+	if strings.EqualFold(strings.TrimSpace(deployment.Framework), "vllm-ascend") && deployment.Ray.Enabled {
+		head := pickRayHeadServer(deployment, servers)
+		if head.ID != "" && head.ID != server.ID {
+			containerName := deploymentContainerName(deployment, runtime)
+			return withDockerPrivileges(
+				"run_docker exec " + shellQuote(containerName) + " bash -lc " + shellQuote("ray status >/dev/null"),
+			)
+		}
+	}
+
 	var url string
 	switch strings.ToLower(strings.TrimSpace(deployment.Framework)) {
 	case "tei":
@@ -534,6 +583,23 @@ func pickRayHeadServer(deployment domain.DeploymentConfig, servers []domain.Serv
 		return servers[0]
 	}
 	return domain.ServerConfig{}
+}
+
+func serverOverrideFor(deployment domain.DeploymentConfig, serverID string) domain.DeploymentServerOverride {
+	for _, item := range deployment.ServerOverrides {
+		if item.ServerID == serverID {
+			return item
+		}
+	}
+	return domain.DeploymentServerOverride{}
+}
+
+func effectiveRayNodeIP(server domain.ServerConfig, override domain.DeploymentServerOverride) string {
+	return firstNonEmpty(strings.TrimSpace(override.NodeIP), strings.TrimSpace(server.Host))
+}
+
+func effectiveVisibleDevices(deployment domain.DeploymentConfig, override domain.DeploymentServerOverride) string {
+	return firstNonEmpty(strings.TrimSpace(override.VisibleDevices), strings.TrimSpace(deployment.Ray.VisibleDevices))
 }
 
 func defaultRayPort(port int) int {

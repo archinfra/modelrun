@@ -103,6 +103,7 @@ export interface VLLMParams {
   dtype: string;
   trustRemoteCode: boolean;
   enablePrefixCaching: boolean;
+  enableExpertParallel?: boolean;
   maxNumSeqs: number;
   maxNumBatchedTokens: number;
   swapSpace?: number;
@@ -110,6 +111,13 @@ export interface VLLMParams {
   enableChunkedPrefill?: boolean;
   speculativeModel?: string;
   numSpeculativeTokens?: number;
+}
+
+export interface DeploymentServerOverride {
+  serverId: string;
+  nodeIp?: string;
+  visibleDevices?: string;
+  rayStartArgs?: string[];
 }
 
 export interface DeploymentRayConfig {
@@ -141,6 +149,7 @@ export interface DeploymentConfig {
   vllm: VLLMParams;
   ray?: DeploymentRayConfig;
   runtime?: DeploymentRuntimeConfig;
+  serverOverrides?: DeploymentServerOverride[];
   servers: string[];
   apiPort: number;
   createdAt: string;

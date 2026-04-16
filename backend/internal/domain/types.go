@@ -117,6 +117,7 @@ type VLLMParams struct {
 	Dtype                string  `json:"dtype"`
 	TrustRemoteCode      bool    `json:"trustRemoteCode"`
 	EnablePrefixCaching  bool    `json:"enablePrefixCaching"`
+	EnableExpertParallel bool    `json:"enableExpertParallel,omitempty"`
 	MaxNumSeqs           int     `json:"maxNumSeqs"`
 	MaxNumBatchedTokens  int     `json:"maxNumBatchedTokens"`
 	SwapSpace            int     `json:"swapSpace,omitempty"`
@@ -124,6 +125,13 @@ type VLLMParams struct {
 	EnableChunkedPrefill bool    `json:"enableChunkedPrefill,omitempty"`
 	SpeculativeModel     string  `json:"speculativeModel,omitempty"`
 	NumSpeculativeTokens int     `json:"numSpeculativeTokens,omitempty"`
+}
+
+type DeploymentServerOverride struct {
+	ServerID       string   `json:"serverId"`
+	NodeIP         string   `json:"nodeIp,omitempty"`
+	VisibleDevices string   `json:"visibleDevices,omitempty"`
+	RayStartArgs   []string `json:"rayStartArgs,omitempty"`
 }
 
 type DeploymentRayConfig struct {
@@ -146,21 +154,22 @@ type DeploymentRuntimeConfig struct {
 }
 
 type DeploymentConfig struct {
-	ID        string                  `json:"id"`
-	Name      string                  `json:"name"`
-	Status    string                  `json:"status"`
-	Framework string                  `json:"framework,omitempty"`
-	Model     ModelConfig             `json:"model"`
-	Docker    DockerConfig            `json:"docker"`
-	VLLM      VLLMParams              `json:"vllm"`
-	Ray       DeploymentRayConfig     `json:"ray,omitempty"`
-	Runtime   DeploymentRuntimeConfig `json:"runtime,omitempty"`
-	Servers   []string                `json:"servers"`
-	APIPort   int                     `json:"apiPort"`
-	CreatedAt string                  `json:"createdAt"`
-	UpdatedAt string                  `json:"updatedAt"`
-	Endpoints []DeploymentEndpoint    `json:"endpoints,omitempty"`
-	Metrics   *DeploymentMetrics      `json:"metrics,omitempty"`
+	ID              string                     `json:"id"`
+	Name            string                     `json:"name"`
+	Status          string                     `json:"status"`
+	Framework       string                     `json:"framework,omitempty"`
+	Model           ModelConfig                `json:"model"`
+	Docker          DockerConfig               `json:"docker"`
+	VLLM            VLLMParams                 `json:"vllm"`
+	Ray             DeploymentRayConfig        `json:"ray,omitempty"`
+	Runtime         DeploymentRuntimeConfig    `json:"runtime,omitempty"`
+	ServerOverrides []DeploymentServerOverride `json:"serverOverrides,omitempty"`
+	Servers         []string                   `json:"servers"`
+	APIPort         int                        `json:"apiPort"`
+	CreatedAt       string                     `json:"createdAt"`
+	UpdatedAt       string                     `json:"updatedAt"`
+	Endpoints       []DeploymentEndpoint       `json:"endpoints,omitempty"`
+	Metrics         *DeploymentMetrics         `json:"metrics,omitempty"`
 }
 
 type DeploymentEndpoint struct {

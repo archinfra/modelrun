@@ -210,21 +210,22 @@ func (a *API) handleDeploymentMetrics(w http.ResponseWriter, id string) {
 }
 
 type createDeploymentRequest struct {
-	ID        string                         `json:"id"`
-	Name      string                         `json:"name"`
-	Status    string                         `json:"status"`
-	Framework string                         `json:"framework"`
-	Model     *domain.ModelConfig            `json:"model"`
-	ModelID   string                         `json:"modelId"`
-	ServerIDs []string                       `json:"serverIds"`
-	Servers   []string                       `json:"servers"`
-	Docker    domain.DockerConfig            `json:"docker"`
-	VLLM      domain.VLLMParams              `json:"vllm"`
-	Ray       domain.DeploymentRayConfig     `json:"ray"`
-	Runtime   domain.DeploymentRuntimeConfig `json:"runtime"`
-	APIPort   int                            `json:"apiPort"`
-	CreatedAt string                         `json:"createdAt"`
-	UpdatedAt string                         `json:"updatedAt"`
+	ID              string                            `json:"id"`
+	Name            string                            `json:"name"`
+	Status          string                            `json:"status"`
+	Framework       string                            `json:"framework"`
+	Model           *domain.ModelConfig               `json:"model"`
+	ModelID         string                            `json:"modelId"`
+	ServerIDs       []string                          `json:"serverIds"`
+	Servers         []string                          `json:"servers"`
+	Docker          domain.DockerConfig               `json:"docker"`
+	VLLM            domain.VLLMParams                 `json:"vllm"`
+	Ray             domain.DeploymentRayConfig        `json:"ray"`
+	Runtime         domain.DeploymentRuntimeConfig    `json:"runtime"`
+	ServerOverrides []domain.DeploymentServerOverride `json:"serverOverrides"`
+	APIPort         int                               `json:"apiPort"`
+	CreatedAt       string                            `json:"createdAt"`
+	UpdatedAt       string                            `json:"updatedAt"`
 }
 
 func (a *API) readDeploymentCreate(r *http.Request) (domain.DeploymentConfig, error) {
@@ -264,19 +265,20 @@ func (a *API) readDeploymentCreate(r *http.Request) (domain.DeploymentConfig, er
 	}
 
 	deployment := domain.DeploymentConfig{
-		ID:        req.ID,
-		Name:      req.Name,
-		Status:    req.Status,
-		Framework: req.Framework,
-		Model:     model,
-		Docker:    req.Docker,
-		VLLM:      req.VLLM,
-		Ray:       req.Ray,
-		Runtime:   req.Runtime,
-		Servers:   servers,
-		APIPort:   req.APIPort,
-		CreatedAt: req.CreatedAt,
-		UpdatedAt: req.UpdatedAt,
+		ID:              req.ID,
+		Name:            req.Name,
+		Status:          req.Status,
+		Framework:       req.Framework,
+		Model:           model,
+		Docker:          req.Docker,
+		VLLM:            req.VLLM,
+		Ray:             req.Ray,
+		Runtime:         req.Runtime,
+		ServerOverrides: req.ServerOverrides,
+		Servers:         servers,
+		APIPort:         req.APIPort,
+		CreatedAt:       req.CreatedAt,
+		UpdatedAt:       req.UpdatedAt,
 	}
 	defaultDeployment(&deployment)
 

@@ -86,3 +86,91 @@ func TestBuildLaunchRuntimeCommandUsesOptionalSudoForWritableDirs(t *testing.T) 
 		}
 	}
 }
+
+func TestBuildVLLMAscendLaunchScriptUsesRayHeadAndWorkerRoles(t *testing.T) {
+	deployment := domain.DeploymentConfig{
+		ID:        "deployment_test",
+		Name:      "demo",
+		Framework: "vllm-ascend",
+		Ray: domain.DeploymentRayConfig{
+			Enabled:       true,
+			HeadServerID:  "server-head",
+			NICName:       "eth0",
+			Port:          6380,
+			DashboardPort: 8266,
+		},
+		VLLM: domain.VLLMParams{
+			TensorParallelSize:   8,
+			PipelineParallelSize: 2,
+			MaxModelLen:          32768,
+			GPUMemoryUtilization: 0.92,
+			Dtype:                "bfloat16",
+			TrustRemoteCode:      true,
+			EnablePrefixCaching:  true,
+			EnableExpertParallel: true,
+			MaxNumSeqs:           64,
+			MaxNumBatchedTokens:  16384,
+		},
+		ServerOverrides: []domain.DeploymentServerOverride{
+			{ServerID: "server-head", NodeIP: "10.0.0.11", VisibleDevices: "0,1,2,3,4,5,6,7"},
+			{ServerID: "server-worker", NodeIP: "10.0.0.12", VisibleDevices: "0,1,2,3,4,5,6,7", RayStartArgs: []string{"--resources", "{\"worker\": 1}"}},
+		},
+		APIPort: 8000,
+		Runtime: domain.DeploymentRuntimeConfig{},
+	}
+	servers := []domain.ServerConfig{
+		{ID: "server-head", Host: "10.0.0.11"},
+		{ID: "server-worker", Host: "10.0.0.12"},
+	}
+
+	headScript := buildVLLMAscendLaunchScript(deployment, servers[0], servers)
+	for _, needle := range []string{
+		"'ray' 'start' '--head' '--port' '6380' '--dashboard-host' '0.0.0.0' '--dashboard-port' '8266' '--node-ip-address' '10.0.0.11'",
+		"export HCCL_IF_IP='10.0.0.11'",
+		"export HCCL_SOCKET_IFNAME='eth0'",
+		"'--distributed-executor-backend' 'ray'",
+		"--enable-expert-parallel",
+		"export RAY_ADDRESS=auto",
+	} {
+		if !strings.Contains(headScript, needle) {
+			t.Fatalf("expected head script to contain %q, got %q", needle, headScript)
+		}
+	}
+
+	workerScript := buildVLLMAscendLaunchScript(deployment, servers[1], servers)
+	for _, needle := range []string{
+		"'ray' 'start' '--address' '10.0.0.11:6380' '--node-ip-address' '10.0.0.12' '--resources' '{\"worker\": 1}'",
+		"export HCCL_IF_IP='10.0.0.12'",
+		"exec tail -f /dev/null",
+	} {
+		if !strings.Contains(workerScript, needle) {
+			t.Fatalf("expected worker script to contain %q, got %q", needle, workerScript)
+		}
+	}
+	if strings.Contains(workerScript, "vllm serve /model") {
+		t.Fatalf("expected worker script to stay idle after joining ray, got %q", workerScript)
+	}
+}
+
+func TestBuildVerifyCommandUsesRayStatusForWorkerNode(t *testing.T) {
+	deployment := domain.DeploymentConfig{
+		ID:        "deployment_test",
+		Name:      "demo",
+		Framework: "vllm-ascend",
+		Ray: domain.DeploymentRayConfig{
+			Enabled:      true,
+			HeadServerID: "server-head",
+		},
+		APIPort: 8000,
+	}
+	runtime := domain.DeploymentRuntimeConfig{ContainerName: "modelrun-demo"}
+	servers := []domain.ServerConfig{
+		{ID: "server-head", Host: "10.0.0.11"},
+		{ID: "server-worker", Host: "10.0.0.12"},
+	}
+
+	command := buildVerifyCommand(deployment, runtime, servers[1], servers)
+	if !strings.Contains(command, "run_docker exec 'modelrun-demo' bash -lc 'ray status >/dev/null'") {
+		t.Fatalf("expected worker verify command to use ray status in container, got %q", command)
+	}
+}
