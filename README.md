@@ -22,7 +22,7 @@ the `modelscope` CLI:
 docker run --rm ghcr.io/archinfra/modelrun:latest modelscope --help
 ```
 
-To enable Aliyun image publishing in Actions, configure these variables and
+To enable Aliyun image publishing in Actions, configure these variables or
 secrets at the GitHub organization or repository level:
 
 - `ALIYUN_REGISTRY`
@@ -35,7 +35,9 @@ secrets at the GitHub organization or repository level:
 - `ALIYUN_REGISTRY_PASSWORD`
 
 After that, branch pushes publish `branch`, `sha-*`, and `latest` tags, and git
-tag pushes publish the matching git tag to both GHCR and Aliyun ACR.
+tag pushes publish the matching git tag to both GHCR and Aliyun ACR. The
+workflow now emits an explicit notice listing the missing Aliyun settings when
+the publish step is skipped, so it is easier to see why ACR was not used.
 
 Runtime paths:
 

@@ -18,11 +18,6 @@ env:
   GHCR_REGISTRY: ghcr.io
   GHCR_IMAGE_NAME: ${{ github.repository }}
   MODELSCOPE_VERSION: 1.35.4
-  ALIYUN_REGISTRY: ${{ vars.ALIYUN_REGISTRY }}
-  ALIYUN_REGISTRY_NAMESPACE: ${{ vars.ALIYUN_REGISTRY_NAMESPACE }}
-  ALIYUN_IMAGE_NAME: ${{ vars.ALIYUN_IMAGE_NAME }}
-  ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
-  ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
 jobs:
   frontend:
@@ -105,6 +100,50 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Resolve publish registries
+        id: registry-config
+        shell: bash
+        env:
+          ALIYUN_REGISTRY_VAR: ${{ vars.ALIYUN_REGISTRY }}
+          ALIYUN_REGISTRY_NAMESPACE_VAR: ${{ vars.ALIYUN_REGISTRY_NAMESPACE }}
+          ALIYUN_IMAGE_NAME_VAR: ${{ vars.ALIYUN_IMAGE_NAME }}
+          ALIYUN_REGISTRY_SECRET: ${{ secrets.ALIYUN_REGISTRY }}
+          ALIYUN_REGISTRY_NAMESPACE_SECRET: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+          ALIYUN_IMAGE_NAME_SECRET: ${{ secrets.ALIYUN_IMAGE_NAME }}
+          ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+        run: |
+          aliyun_registry="${ALIYUN_REGISTRY_VAR:-$ALIYUN_REGISTRY_SECRET}"
+          aliyun_namespace="${ALIYUN_REGISTRY_NAMESPACE_VAR:-$ALIYUN_REGISTRY_NAMESPACE_SECRET}"
+          aliyun_image_name="${ALIYUN_IMAGE_NAME_VAR:-$ALIYUN_IMAGE_NAME_SECRET}"
+          if [[ -z "$aliyun_image_name" ]]; then
+            aliyun_image_name="${GITHUB_REPOSITORY##*/}"
+          fi
+
+          missing=()
+          [[ -n "$aliyun_registry" ]] || missing+=("ALIYUN_REGISTRY")
+          [[ -n "$aliyun_namespace" ]] || missing+=("ALIYUN_REGISTRY_NAMESPACE")
+          [[ -n "$ALIYUN_REGISTRY_USERNAME" ]] || missing+=("ALIYUN_REGISTRY_USERNAME")
+          [[ -n "$ALIYUN_REGISTRY_PASSWORD" ]] || missing+=("ALIYUN_REGISTRY_PASSWORD")
+
+          aliyun_enabled=false
+          aliyun_image=""
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            aliyun_enabled=true
+            aliyun_image="${aliyun_registry}/${aliyun_namespace}/${aliyun_image_name}"
+            echo "::notice::Aliyun registry publish enabled for ${aliyun_image}"
+          else
+            echo "::notice::Aliyun registry publish skipped because these settings are missing: $(IFS=', '; echo "${missing[*]}")."
+          fi
+
+          {
+            echo "aliyun_enabled=${aliyun_enabled}"
+            echo "aliyun_registry=${aliyun_registry}"
+            echo "aliyun_namespace=${aliyun_namespace}"
+            echo "aliyun_image_name=${aliyun_image_name}"
+            echo "aliyun_image=${aliyun_image}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -114,12 +153,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Aliyun Container Registry
-        if: github.event_name != 'pull_request' && env.ALIYUN_REGISTRY != '' && env.ALIYUN_REGISTRY_NAMESPACE != '' && env.ALIYUN_REGISTRY_USERNAME != '' && env.ALIYUN_REGISTRY_PASSWORD != ''
+        if: github.event_name != 'pull_request' && steps.registry-config.outputs.aliyun_enabled == 'true'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.ALIYUN_REGISTRY }}
-          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
-          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+          registry: ${{ steps.registry-config.outputs.aliyun_registry }}
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
       - name: Docker metadata
         id: meta
@@ -137,25 +176,18 @@ jobs:
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}
-          ALIYUN_REGISTRY: ${{ env.ALIYUN_REGISTRY }}
-          ALIYUN_REGISTRY_NAMESPACE: ${{ env.ALIYUN_REGISTRY_NAMESPACE }}
-          ALIYUN_IMAGE_NAME: ${{ env.ALIYUN_IMAGE_NAME }}
-          ALIYUN_REGISTRY_USERNAME: ${{ env.ALIYUN_REGISTRY_USERNAME }}
-          ALIYUN_REGISTRY_PASSWORD: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+          ALIYUN_ENABLED: ${{ steps.registry-config.outputs.aliyun_enabled }}
+          ALIYUN_IMAGE: ${{ steps.registry-config.outputs.aliyun_image }}
         run: |
           tags='${{ steps.meta.outputs.tags }}'
           combined_tags="$tags"
 
-          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
-            aliyun_image_name="${ALIYUN_IMAGE_NAME:-${GITHUB_REPOSITORY##*/}}"
-            aliyun_image="${ALIYUN_REGISTRY}/${ALIYUN_REGISTRY_NAMESPACE}/${aliyun_image_name}"
+          if [[ "$ALIYUN_ENABLED" == "true" && -n "$ALIYUN_IMAGE" ]]; then
             while IFS= read -r tag; do
               [[ -z "$tag" ]] && continue
               suffix="${tag#${GHCR_IMAGE}:}"
-              combined_tags+=$'\n'"${aliyun_image}:${suffix}"
+              combined_tags+=$'\n'"${ALIYUN_IMAGE}:${suffix}"
             done <<< "$tags"
-          else
-            echo "::notice::Aliyun registry publish skipped because ALIYUN_REGISTRY / ALIYUN_REGISTRY_NAMESPACE / ALIYUN_REGISTRY_USERNAME / ALIYUN_REGISTRY_PASSWORD are not fully configured."
           fi
 
           {
