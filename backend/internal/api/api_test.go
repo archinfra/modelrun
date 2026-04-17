@@ -163,6 +163,29 @@ func TestBackendLogsEndpoint(t *testing.T) {
 	}
 }
 
+func TestServerNetdataStatus(t *testing.T) {
+	handler := newTestHandler(t)
+
+	project := mustRequest[domain.Project](t, handler, http.MethodPost, "/api/projects", map[string]any{
+		"name": "netdata-demo",
+	})
+	server := mustRequest[domain.ServerConfig](t, handler, http.MethodPost, "/api/servers", map[string]any{
+		"projectId": project.ID,
+		"name":      "node-01",
+		"host":      "mock-node-01",
+		"sshPort":   22,
+		"username":  "root",
+	})
+
+	status := mustRequest[map[string]any](t, handler, http.MethodGet, "/api/servers/"+server.ID+"/netdata", map[string]any{})
+	if status["reachable"] != true {
+		t.Fatalf("expected mock netdata to be reachable, got %#v", status)
+	}
+	if _, ok := status["dashboardPath"].(string); !ok {
+		t.Fatalf("expected dashboardPath in response, got %#v", status)
+	}
+}
+
 func TestPipelineStepTemplateOverridesPipelineBoardMetadata(t *testing.T) {
 	handler := newTestHandler(t)
 

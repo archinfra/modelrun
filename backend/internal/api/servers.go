@@ -1,12 +1,20 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
+	"modelrun/backend/internal/logging"
 	"modelrun/backend/internal/store"
 )
 
@@ -68,6 +76,10 @@ func (a *API) handleServer(w http.ResponseWriter, r *http.Request) {
 		a.handleServerNPUExporter(w, r, id, rest[1:])
 		return
 	}
+	if rest[0] == "netdata" {
+		a.handleServerNetdata(w, r, id, rest[1:])
+		return
+	}
 	if len(rest) != 1 {
 		http.NotFound(w, r)
 		return
@@ -112,6 +124,26 @@ func (a *API) handleServerNPUExporter(w http.ResponseWriter, r *http.Request, id
 			return
 		}
 		a.handleServerNPUExporterInstall(w, r, id)
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (a *API) handleServerNetdata(w http.ResponseWriter, r *http.Request, id string, rest []string) {
+	if len(rest) == 0 {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		a.handleServerNetdataStatus(w, id)
+		return
+	}
+	if rest[0] == "dashboard" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		a.handleServerNetdataDashboard(w, r, id, rest[1:])
 		return
 	}
 	http.NotFound(w, r)
@@ -204,10 +236,16 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 	success := err == nil
 	message := snapshot.Message
 	var exporterStatus *collect.NPUExporterStatus
+	var netdataStatus *collect.NetdataStatus
 	if err != nil {
 		message = err.Error()
-	} else if status, statusErr := a.collector.NPUExporterStatus(server, jump); statusErr == nil {
-		exporterStatus = &status
+	} else {
+		if status, statusErr := a.collector.NPUExporterStatus(server, jump); statusErr == nil {
+			exporterStatus = &status
+		}
+		if nd, ndErr := a.collector.NetdataStatus(server, jump); ndErr == nil {
+			netdataStatus = &nd
+		}
 	}
 
 	if success {
@@ -224,6 +262,15 @@ func (a *API) handleServerTest(w http.ResponseWriter, id string) {
 				server.NPUExporterStatus = "offline"
 			}
 			server.NPUExporterLastCheck = domain.Now()
+		}
+		if netdataStatus != nil {
+			server.NetdataEndpoint = netdataStatus.Endpoint
+			if netdataStatus.Reachable {
+				server.NetdataStatus = "online"
+			} else {
+				server.NetdataStatus = "offline"
+			}
+			server.NetdataLastCheck = domain.Now()
 		}
 	} else {
 		server.Status = "offline"
@@ -321,6 +368,149 @@ func (a *API) handleServerNPUExporterStatus(w http.ResponseWriter, id string) {
 	a.state.SetServerRuntime(id, server)
 
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (a *API) handleServerNetdataStatus(w http.ResponseWriter, id string) {
+	data := a.store.Snapshot()
+	idx := findServer(data.Servers, id)
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, store.ErrNotFound)
+		return
+	}
+
+	server := data.Servers[idx]
+	jump, err := resolveJumpHost(data, server)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	status, err := a.collector.NetdataStatus(server, jump)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	server.NetdataEndpoint = status.Endpoint
+	if status.Reachable {
+		server.NetdataStatus = "online"
+	} else {
+		server.NetdataStatus = "offline"
+	}
+	server.NetdataLastCheck = domain.Now()
+	a.state.SetServerRuntime(id, server)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"endpoint":      status.Endpoint,
+		"reachable":     status.Reachable,
+		"message":       status.Message,
+		"hostname":      status.Hostname,
+		"version":       status.Version,
+		"dashboardPath": "/api/servers/" + id + "/netdata/dashboard/v1/",
+		"server":        server,
+	})
+}
+
+func (a *API) handleServerNetdataDashboard(w http.ResponseWriter, r *http.Request, id string, rest []string) {
+	data := a.store.Snapshot()
+	idx := findServer(data.Servers, id)
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, store.ErrNotFound)
+		return
+	}
+	server := a.state.OverlayServer(data.Servers[idx])
+	if collect.IsMockServer(server) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, "<html><body style='font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:24px'><h2>Mock Netdata Dashboard</h2><p>server: "+server.Name+"</p><p>endpoint: "+server.NetdataEndpoint+"</p></body></html>")
+		return
+	}
+
+	jump, err := resolveJumpHost(data, server)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	client, closeFn, err := a.collector.DialSSH(server, jump)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	defer closeFn()
+
+	scheme, host, err := collect.NetdataTarget(server.NetdataEndpoint)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	target := &url.URL{Scheme: scheme, Host: host}
+	prefix := "/api/servers/" + id + "/netdata/dashboard"
+	path := "/"
+	if len(rest) > 0 {
+		path += strings.Join(rest, "/")
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Director = func(req *http.Request) {
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.URL.Path = singleJoiningSlash(target.Path, path)
+		req.Host = target.Host
+	}
+	proxy.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return client.Dial(network, addr)
+		},
+		ForceAttemptHTTP2: false,
+	}
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("X-Frame-Options")
+		resp.Header.Del("Content-Security-Policy")
+		resp.Header.Del("Content-Security-Policy-Report-Only")
+		if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
+			raw, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			_ = resp.Body.Close()
+			html := string(raw)
+			baseHref := prefix
+			if !strings.HasSuffix(baseHref, "/") {
+				baseHref += "/"
+			}
+			trimmedPath := strings.TrimPrefix(path, "/")
+			if trimmedPath != "" {
+				baseHref += trimmedPath
+				if !strings.HasSuffix(baseHref, "/") {
+					baseHref += "/"
+				}
+			}
+			baseTag := `<base href="` + baseHref + `">`
+			if strings.Contains(html, "<head>") {
+				html = strings.Replace(html, "<head>", "<head>"+baseTag, 1)
+			}
+			resp.Body = io.NopCloser(strings.NewReader(html))
+			resp.ContentLength = int64(len(html))
+			resp.Header.Set("Content-Length", strconv.Itoa(len(html)))
+		}
+		return nil
+	}
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
+		logging.Errorf("netdata", "proxy server=%s failed: %v", id, proxyErr)
+		writeError(rw, http.StatusBadGateway, proxyErr)
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	default:
+		return a + b
+	}
 }
 
 func (a *API) handleServerNPUExporterInstall(w http.ResponseWriter, r *http.Request, id string) {

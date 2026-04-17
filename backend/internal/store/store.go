@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"modelrun/backend/internal/catalog"
+	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
 
 	_ "modernc.org/sqlite"
@@ -319,6 +321,11 @@ func stripRuntimeData(data domain.Data) domain.Data {
 		data.Servers[i].NPUExporterEndpoint = ""
 		data.Servers[i].NPUExporterStatus = ""
 		data.Servers[i].NPUExporterLastCheck = ""
+		if strings.TrimSpace(data.Servers[i].NetdataEndpoint) == "" {
+			data.Servers[i].NetdataEndpoint = collect.DefaultNetdataEndpoint()
+		}
+		data.Servers[i].NetdataStatus = ""
+		data.Servers[i].NetdataLastCheck = ""
 		data.Servers[i].LastCheck = ""
 		if data.Servers[i].Status == "" || data.Servers[i].Status == "online" || data.Servers[i].Status == "offline" {
 			data.Servers[i].Status = "unknown"

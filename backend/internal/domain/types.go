@@ -37,6 +37,9 @@ type ServerConfig struct {
 	NPUExporterEndpoint  string    `json:"npuExporterEndpoint,omitempty"`
 	NPUExporterStatus    string    `json:"npuExporterStatus,omitempty"`
 	NPUExporterLastCheck string    `json:"npuExporterLastCheck,omitempty"`
+	NetdataEndpoint      string    `json:"netdataEndpoint,omitempty"`
+	NetdataStatus        string    `json:"netdataStatus,omitempty"`
+	NetdataLastCheck     string    `json:"netdataLastCheck,omitempty"`
 	LastCheck            string    `json:"lastCheck,omitempty"`
 	Status               string    `json:"status"`
 }

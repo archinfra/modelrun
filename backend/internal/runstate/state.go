@@ -29,6 +29,9 @@ type serverRuntime struct {
 	NPUExporterEndpoint  string
 	NPUExporterStatus    string
 	NPUExporterLastCheck string
+	NetdataEndpoint      string
+	NetdataStatus        string
+	NetdataLastCheck     string
 	LastCheck            string
 	Status               string
 }
@@ -233,6 +236,9 @@ func (s *State) SetServerRuntime(serverID string, item domain.ServerConfig) {
 		NPUExporterEndpoint:  item.NPUExporterEndpoint,
 		NPUExporterStatus:    item.NPUExporterStatus,
 		NPUExporterLastCheck: item.NPUExporterLastCheck,
+		NetdataEndpoint:      item.NetdataEndpoint,
+		NetdataStatus:        item.NetdataStatus,
+		NetdataLastCheck:     item.NetdataLastCheck,
 		LastCheck:            item.LastCheck,
 		Status:               item.Status,
 	}
@@ -320,6 +326,9 @@ func (s *State) overlayServerLocked(item domain.ServerConfig) domain.ServerConfi
 		item.NPUExporterEndpoint = runtime.NPUExporterEndpoint
 		item.NPUExporterStatus = runtime.NPUExporterStatus
 		item.NPUExporterLastCheck = runtime.NPUExporterLastCheck
+		item.NetdataEndpoint = runtime.NetdataEndpoint
+		item.NetdataStatus = runtime.NetdataStatus
+		item.NetdataLastCheck = runtime.NetdataLastCheck
 		item.LastCheck = runtime.LastCheck
 		item.Status = runtime.Status
 	}

@@ -33,6 +33,16 @@ type ServerTestResponse = {
   server?: ServerConfig;
 };
 
+type NetdataStatusResponse = {
+  endpoint: string;
+  reachable: boolean;
+  message: string;
+  hostname?: string;
+  version?: string;
+  dashboardPath: string;
+  server?: ServerConfig;
+};
+
 const emptyForm: Partial<ServerConfig> = {
   name: '',
   host: '',
@@ -45,6 +55,7 @@ const emptyForm: Partial<ServerConfig> = {
   useJumpHost: false,
   jumpHostId: '',
   npuExporterEndpoint: '',
+  netdataEndpoint: 'http://127.0.0.1:19999',
 };
 
 const requestJSON = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -99,6 +110,9 @@ const buildServerPayload = (
     npuExporterEndpoint: formData.npuExporterEndpoint || existing?.npuExporterEndpoint,
     npuExporterStatus: existing?.npuExporterStatus,
     npuExporterLastCheck: existing?.npuExporterLastCheck,
+    netdataEndpoint: formData.netdataEndpoint || existing?.netdataEndpoint || 'http://127.0.0.1:19999',
+    netdataStatus: existing?.netdataStatus,
+    netdataLastCheck: existing?.netdataLastCheck,
     lastCheck: existing?.lastCheck,
     status: existing?.status || 'offline',
   };
@@ -109,9 +123,11 @@ const ServerCard: React.FC<{
   jumpName?: string;
   isChecking: boolean;
   onProbe: (server: ServerConfig) => void;
+  onRefreshNetdata: (server: ServerConfig) => void;
+  onInstallNetdata: (server: ServerConfig) => void;
   onEdit: (server: ServerConfig) => void;
   onDelete: (id: string) => void;
-}> = ({ server, jumpName, isChecking, onProbe, onEdit, onDelete }) => {
+}> = ({ server, jumpName, isChecking, onProbe, onRefreshNetdata, onInstallNetdata, onEdit, onDelete }) => {
   const [expanded, setExpanded] = useState(false);
   const accelerators = server.gpuInfo || [];
   const gpuCount = accelerators.filter((gpu) => gpu.type !== 'npu').length;
@@ -162,18 +178,29 @@ const ServerCard: React.FC<{
                       : 'bg-red-100 text-red-700'
                   }`}
                 >
-                  {server.status === 'online' ? '在线' : server.status === 'checking' ? '采集中' : '离线'}
+                  {server.status === 'online' ? '??' : server.status === 'checking' ? '???' : '??'}
                 </span>
                 {server.isJumpHost && (
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700">
-                    跳板机
+                    ???
                   </span>
                 )}
                 {server.useJumpHost && (
                   <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
-                    经 {jumpName || '跳板机'} 访问
+                    ? {jumpName || '???'} ??
                   </span>
                 )}
+                <span
+                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                    server.netdataStatus === 'online'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : server.netdataStatus === 'offline'
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  Netdata {server.netdataStatus === 'online' ? '??' : server.netdataStatus === 'offline' ? '??' : '???'}
+                </span>
               </div>
             </div>
           </div>
@@ -184,7 +211,14 @@ const ServerCard: React.FC<{
               className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white rounded-lg text-sm font-medium transition-colors"
             >
               <RefreshCw className={`w-4 h-4 ${isChecking ? 'animate-spin' : ''}`} />
-              采集信息
+              SSH ??
+            </button>
+            <button
+              onClick={() => onInstallNetdata(server)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <Activity className="w-4 h-4" />
+              ?? Netdata
             </button>
             <button
               onClick={() => setExpanded(!expanded)}
@@ -215,37 +249,37 @@ const ServerCard: React.FC<{
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
               <Cpu className="w-4 h-4" />
-              <span>加速卡</span>
+              <span>???</span>
             </div>
             <div className="text-lg font-semibold text-slate-900">
-              {accelerators.length > 0 ? `${gpuCount} GPU / ${npuCount} NPU` : '未采集'}
+              {accelerators.length > 0 ? `${gpuCount} GPU / ${npuCount} NPU` : '???'}
             </div>
           </div>
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
               <HardDrive className="w-4 h-4" />
-              <span>显存/内存</span>
+              <span>?? / HBM</span>
             </div>
             <div className="text-lg font-semibold text-slate-900">
-              {accelerators.length > 0 ? formatMB(totalMemory) : '未采集'}
+              {accelerators.length > 0 ? formatMB(totalMemory) : '???'}
             </div>
           </div>
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
               <Thermometer className="w-4 h-4" />
-              <span>温度</span>
+              <span>??</span>
             </div>
             <div className="text-lg font-semibold text-slate-900">
-              {averageTemperature === null ? '未采集' : `${averageTemperature}°C`}
+              {averageTemperature === null ? '???' : `${averageTemperature}?C`}
             </div>
           </div>
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
               <Activity className="w-4 h-4" />
-              <span>利用率</span>
+              <span>???</span>
             </div>
             <div className="text-lg font-semibold text-slate-900">
-              {averageUtilization === null ? '未采集' : `${averageUtilization}%`}
+              {averageUtilization === null ? '???' : `${averageUtilization}%`}
             </div>
           </div>
         </div>
@@ -261,21 +295,67 @@ const ServerCard: React.FC<{
           >
             <div className="p-5 space-y-4">
               <div className="flex flex-wrap items-center gap-6 text-sm text-slate-500">
-                <span>驱动: {server.driverVersion || '未采集'}</span>
-                <span>CUDA: {server.cudaVersion || '未采集'}</span>
-                <span>Docker: {server.dockerVersion || '未采集'}</span>
+                <span>??: {server.driverVersion || '???'}</span>
+                <span>CUDA: {server.cudaVersion || '???'}</span>
+                <span>Docker: {server.dockerVersion || '???'}</span>
                 <span>
-                  NPU Exporter: {server.npuExporterStatus || '未检查'}
+                  NPU Exporter: {server.npuExporterStatus || '???'}
                   {server.npuExporterEndpoint ? ` (${server.npuExporterEndpoint})` : ''}
                 </span>
-                <span>最近采集: {server.lastCheck ? new Date(server.lastCheck).toLocaleString() : '未采集'}</span>
+                <span>
+                  Netdata: {server.netdataStatus || '???'}
+                  {server.netdataEndpoint ? ` (${server.netdataEndpoint})` : ''}
+                </span>
+                <span>????: {server.lastCheck ? new Date(server.lastCheck).toLocaleString() : '???'}</span>
               </div>
 
               <div className="space-y-3">
-                <h4 className="font-medium text-slate-900">加速卡详情</h4>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-medium text-slate-900">Netdata ??</h4>
+                    <p className="text-sm text-slate-500">??????????? Netdata ????????</p>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={() => onRefreshNetdata(server)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      ?? Netdata ??
+                    </button>
+                    <a
+                      href={`/api/servers/${server.id}/netdata/dashboard/v1/`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                    >
+                      <Activity className="w-4 h-4" />
+                      ?????
+                    </a>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 overflow-hidden bg-slate-950">
+                  {server.netdataStatus === 'online' ? (
+                    <iframe
+                      key={`${server.id}-${server.netdataLastCheck || 'dashboard'}`}
+                      src={`/api/servers/${server.id}/netdata/dashboard/v1/`}
+                      title={`netdata-${server.name}`}
+                      className="w-full h-[640px] border-0 bg-white"
+                    />
+                  ) : (
+                    <div className="p-5 text-sm text-slate-300">
+                      Netdata ???????????? Netdata??????????????????????
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="font-medium text-slate-900">?????</h4>
                 {accelerators.length === 0 ? (
                   <div className="border border-dashed border-slate-200 rounded-xl p-5 text-sm text-slate-500">
-                    暂无真实采集结果。点击“采集信息”后，后端会通过 SSH 执行 nvidia-smi 或 npu-smi 获取 GPU/NPU 数据。
+                    ???????? GPU / NPU ??????SSH ?????????? SSH ???????????????
                   </div>
                 ) : (
                   accelerators.map((gpu) => {
@@ -299,7 +379,7 @@ const ServerCard: React.FC<{
                           <div className="flex items-center gap-4 text-sm shrink-0">
                             <span className="flex items-center gap-1 text-slate-500">
                               <Thermometer className="w-4 h-4 text-orange-400" />
-                              {gpu.temperature}°C
+                              {gpu.temperature}?C
                             </span>
                             <span className="flex items-center gap-1 text-slate-500">
                               <Zap className="w-4 h-4 text-yellow-400" />
@@ -311,7 +391,7 @@ const ServerCard: React.FC<{
                         <div className="grid grid-cols-2 gap-4">
                           <div>
                             <div className="flex justify-between text-sm text-slate-500 mb-1">
-                              <span>{gpu.type === 'npu' ? 'HBM 使用' : '显存使用'}</span>
+                              <span>{gpu.type === 'npu' ? 'HBM ??' : '????'}</span>
                               <span className="font-mono">
                                 {formatMB(gpu.memoryUsed)} / {formatMB(gpu.memoryTotal)}
                               </span>
@@ -331,7 +411,7 @@ const ServerCard: React.FC<{
                           </div>
                           <div>
                             <div className="flex justify-between text-sm text-slate-500 mb-1">
-                              <span>利用率</span>
+                              <span>???</span>
                               <span className="font-mono">{gpu.utilization}%</span>
                             </div>
                             <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
@@ -437,6 +517,7 @@ export const ServerManager: React.FC = () => {
       privateKey: server.privateKey || '',
       jumpHostId: server.jumpHostId || '',
       npuExporterEndpoint: server.npuExporterEndpoint || '',
+      netdataEndpoint: server.netdataEndpoint || 'http://127.0.0.1:19999',
     });
     setShowAddModal(true);
   };
@@ -510,6 +591,50 @@ export const ServerManager: React.FC = () => {
       setError(err instanceof Error ? err.message : '服务器采集失败');
     } finally {
       setCheckingId(null);
+    }
+  };
+
+  const handleRefreshNetdata = async (server: ServerConfig) => {
+    setNotice('');
+    setError('');
+    try {
+      const result = await requestJSON<NetdataStatusResponse>(`/api/servers/${server.id}/netdata`);
+      if (result.server) {
+        updateServer(server.id, result.server);
+      } else {
+        updateServer(server.id, {
+          netdataEndpoint: result.endpoint,
+          netdataStatus: result.reachable ? 'online' : 'offline',
+          netdataLastCheck: new Date().toISOString(),
+        });
+      }
+      setNotice(result.message || 'Netdata 状态已刷新');
+    } catch (err) {
+      updateServer(server.id, {
+        netdataStatus: 'offline',
+        netdataLastCheck: new Date().toISOString(),
+      });
+      setError(err instanceof Error ? err.message : '刷新 Netdata 状态失败');
+    }
+  };
+
+  const handleInstallNetdata = async (server: ServerConfig) => {
+    setNotice('');
+    setError('');
+    try {
+      await requestJSON('/api/remote-tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: `安装 Netdata - ${server.name}`,
+          scope: 'selected',
+          executionType: 'preset',
+          presetId: 'install_netdata',
+          serverIds: [server.id],
+        }),
+      });
+      setNotice(`已向 ${server.name} 下发 Netdata 安装任务。安装完成后刷新状态即可查看看板。`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '下发 Netdata 安装任务失败');
     }
   };
 
@@ -596,6 +721,8 @@ export const ServerManager: React.FC = () => {
               jumpName={servers.find((candidate) => candidate.id === server.jumpHostId)?.name}
               isChecking={checkingId === server.id}
               onProbe={handleProbe}
+              onRefreshNetdata={handleRefreshNetdata}
+              onInstallNetdata={handleInstallNetdata}
               onEdit={openEdit}
               onDelete={handleDelete}
             />
@@ -722,6 +849,20 @@ export const ServerManager: React.FC = () => {
                   />
                   <p className="text-xs text-slate-500 mt-1">
                     这个地址从目标服务器本机访问；通过跳板机连接时也仍然是目标机本地地址。
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Netdata ??????</label>
+                  <input
+                    type="text"
+                    value={formData.netdataEndpoint || ''}
+                    onChange={(e) => setFormData({ ...formData, netdataEndpoint: e.target.value })}
+                    className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                    placeholder="?? http://127.0.0.1:19999"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    ????? SSH ????????? Netdata ?????????????
                   </p>
                 </div>
 

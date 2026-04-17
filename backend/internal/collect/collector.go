@@ -172,6 +172,13 @@ func (c *Collector) Resources(server domain.ServerConfig, jump *SSHConfig) (doma
 	return collectResources(client)
 }
 
+func (c *Collector) DialSSH(server domain.ServerConfig, jump *SSHConfig) (*ssh.Client, func(), error) {
+	if IsMockServer(server) {
+		return nil, nil, errors.New("mock mode does not provide raw ssh clients")
+	}
+	return c.dial(FromServer(server), jump)
+}
+
 func (c *Collector) dial(target SSHConfig, jump *SSHConfig) (*ssh.Client, func(), error) {
 	if target.Host == "" {
 		return nil, nil, errors.New("server host is empty")

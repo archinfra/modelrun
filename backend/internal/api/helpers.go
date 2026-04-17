@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/domain"
 )
@@ -47,6 +48,9 @@ func defaultServer(server *domain.ServerConfig, projectID string) {
 	}
 	if server.Status == "" {
 		server.Status = "offline"
+	}
+	if strings.TrimSpace(server.NetdataEndpoint) == "" {
+		server.NetdataEndpoint = collect.DefaultNetdataEndpoint()
 	}
 	if !server.UseJumpHost {
 		server.JumpHostID = ""

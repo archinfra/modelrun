@@ -28,6 +28,9 @@ export interface ServerConfig {
   npuExporterEndpoint?: string;
   npuExporterStatus?: string;
   npuExporterLastCheck?: string;
+  netdataEndpoint?: string;
+  netdataStatus?: string;
+  netdataLastCheck?: string;
   lastCheck?: string;
   status: 'online' | 'offline' | 'checking';
 }
