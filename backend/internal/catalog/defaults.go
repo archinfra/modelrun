@@ -104,7 +104,7 @@ func DefaultActionTemplates() []domain.ActionTemplate {
 			ExecutionType: "command",
 			CommandTemplate: withDockerPrivilegesCommand(
 				"(run_docker rm -f {{containerName}} >/dev/null 2>&1 || true) && " +
-					"run_docker run -d --name {{containerName}} --restart unless-stopped --network host --privileged " +
+					"run_docker run -d --name {{containerName}} --restart unless-stopped --network host --privileged --entrypoint npu-exporter " +
 					"-v /dev:/dev " +
 					"-v /usr/local/Ascend:/usr/local/Ascend:ro " +
 					"-v /usr/local/dcmi:/usr/local/dcmi:ro " +
@@ -686,12 +686,9 @@ func withDockerPrivilegesCommand(body string) string {
 		"return $?;",
 		"fi;",
 		"if command -v sudo >/dev/null 2>&1; then",
+		"sudo -n true >/dev/null 2>&1 || { echo 'docker command requires sudo privileges for the current SSH user, or the user must be added to the docker group.' >&2; return 1; };",
 		"sudo -n docker \"$@\";",
-		"status=$?;",
-		"if [ $status -ne 0 ]; then",
-		"echo 'docker command requires sudo privileges for the current SSH user, or the user must be added to the docker group.' >&2;",
-		"fi;",
-		"return $status;",
+		"return $?;",
 		"fi;",
 		"echo 'docker command requires sudo privileges because the current SSH user is not root and sudo is unavailable.' >&2;",
 		"return 1;",

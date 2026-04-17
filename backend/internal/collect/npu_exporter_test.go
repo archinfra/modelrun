@@ -18,6 +18,11 @@ func TestBuildNPUExporterInstallCommandUsesDockerPrivilegeWrapper(t *testing.T) 
 	}
 	for _, needle := range []string{
 		"run_docker(){",
+		"--entrypoint npu-exporter",
+		"-ip='0.0.0.0'",
+		"-port='8082'",
+		"-containerMode=docker",
+		"sudo -n true",
 		"sudo -n docker",
 		"run_docker run -d --name modelrun-npu-exporter",
 	} {

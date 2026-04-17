@@ -19,10 +19,16 @@ func TestBuildPresetCommand(t *testing.T) {
 	if !strings.Contains(command, "repo/exporter:v1") {
 		t.Fatalf("expected image in command, got %q", command)
 	}
+	if !strings.Contains(command, "--entrypoint npu-exporter") {
+		t.Fatalf("expected explicit npu-exporter entrypoint, got %q", command)
+	}
 	for _, needle := range []string{"-ip='0.0.0.0'", "-port='8082'", "-containerMode=docker"} {
 		if !strings.Contains(command, needle) {
 			t.Fatalf("expected command to contain %q, got %q", needle, command)
 		}
+	}
+	if !strings.Contains(command, "sudo -n true") {
+		t.Fatalf("expected sudo probe before docker invocation, got %q", command)
 	}
 	if !strings.Contains(command, "sudo -n docker") {
 		t.Fatalf("expected sudo fallback in command, got %q", command)
