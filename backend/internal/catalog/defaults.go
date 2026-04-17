@@ -517,7 +517,7 @@ func refreshBuiltInActionTemplate(current *domain.ActionTemplate, defaults domai
 	changed := false
 	switch current.ID {
 	case "install_npu_exporter":
-		if !strings.Contains(current.CommandTemplate, "-ip={{listenIP}}") {
+		if !strings.Contains(current.CommandTemplate, "--entrypoint npu-exporter") || !strings.Contains(current.CommandTemplate, "sudo -n true") {
 			current.CommandTemplate = defaults.CommandTemplate
 			current.Description = defaults.Description
 			current.Fields = defaults.Fields
