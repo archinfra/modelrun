@@ -394,3 +394,10 @@ export interface DeploymentLog {
   serverId?: string;
   stepId?: string;
 }
+
+export interface BackendLogEntry {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug' | string;
+  component?: string;
+  message: string;
+}

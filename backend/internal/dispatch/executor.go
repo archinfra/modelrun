@@ -10,6 +10,7 @@ import (
 	"modelrun/backend/internal/catalog"
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
+	"modelrun/backend/internal/logging"
 	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
 )
@@ -93,6 +94,7 @@ func (e *Executor) Create(req CreateTaskRequest) (domain.RemoteTask, error) {
 	}
 
 	e.state.PutRemoteTask(task)
+	logging.Infof("remote-task", "create task %s scope=%s targetServers=%d", task.ID, task.Scope, len(task.ServerIDs))
 
 	go e.run(task.ID)
 
@@ -106,6 +108,7 @@ func (e *Executor) run(taskID string) {
 	if !ok {
 		return
 	}
+	logging.Infof("remote-task", "run task %s on %d server(s)", task.ID, len(task.Runs))
 	snapshot := e.store.Snapshot()
 
 	var wg sync.WaitGroup
@@ -142,6 +145,7 @@ func (e *Executor) executeRun(taskID string, server domain.ServerConfig) {
 		}
 		task.Status = "running"
 	})
+	logging.Debugf("remote-task", "task %s server %s running", taskID, server.ID)
 
 	snapshot := e.store.Snapshot()
 	latestServer, ok := findServer(snapshot.Servers, server.ID)
@@ -155,6 +159,7 @@ func (e *Executor) executeRun(taskID string, server domain.ServerConfig) {
 
 	jump, err := resolveJumpHost(snapshot, server)
 	if err != nil {
+		logging.Errorf("remote-task", "task %s server %s jump host resolve failed: %v", taskID, server.ID, err)
 		e.finishRun(taskID, server.ID, collect.CommandResult{Command: task.CommandPreview}, err)
 		return
 	}
@@ -200,6 +205,11 @@ func (e *Executor) finishRun(taskID, serverID string, result collect.CommandResu
 		}
 		task.Status = "running"
 	})
+	if runErr != nil {
+		logging.Errorf("remote-task", "task %s server %s failed: %v", taskID, serverID, runErr)
+		return
+	}
+	logging.Infof("remote-task", "task %s server %s completed", taskID, serverID)
 }
 
 func (e *Executor) markTaskFinished(taskID string) {
@@ -229,6 +239,9 @@ func (e *Executor) markTaskFinished(taskID string) {
 			task.StartedAt = finishedAt
 		}
 	})
+	if task, ok := e.state.RemoteTask(taskID); ok {
+		logging.Infof("remote-task", "task %s finished with status=%s", task.ID, task.Status)
+	}
 }
 
 func resolveTargetServers(data domain.Data, scope, projectID string, serverIDs []string) ([]domain.ServerConfig, error) {

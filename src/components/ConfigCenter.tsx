@@ -15,7 +15,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { requestJSON } from '../lib/api';
-import { ActionTemplate, BootstrapConfig, DeploymentLog, PipelineStepTemplate, SystemStatus } from '../types';
+import { ActionTemplate, BackendLogEntry, BootstrapConfig, PipelineStepTemplate, SystemStatus } from '../types';
 
 type ActionTemplateDraft = Partial<ActionTemplate> & {
   fieldsText: string;
@@ -100,7 +100,7 @@ export const ConfigCenter: React.FC = () => {
   const [actions, setActions] = useState<ActionTemplate[]>([]);
   const [bootstraps, setBootstraps] = useState<BootstrapConfig[]>([]);
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStepTemplate[]>([]);
-  const [logs, setLogs] = useState<DeploymentLog[]>([]);
+  const [logs, setLogs] = useState<BackendLogEntry[]>([]);
   const [activeTab, setActiveTab] = useState<ConfigTab>('actions');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -132,7 +132,7 @@ export const ConfigCenter: React.FC = () => {
   };
 
   const loadLogs = async () => {
-    const logItems = await requestJSON<DeploymentLog[]>('/api/logs?limit=200');
+    const logItems = await requestJSON<BackendLogEntry[]>('/api/backend-logs?limit=200');
     setLogs(Array.isArray(logItems) ? logItems : []);
   };
 
@@ -764,7 +764,7 @@ export const ConfigCenter: React.FC = () => {
           <Database className="w-5 h-5 text-slate-700" />
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Backend Logs</h2>
-            <p className="text-sm text-slate-500">查看最近 200 条后端事件日志。运行中的步骤日志仍然走 WebSocket，结束态摘要会沉淀到这里。</p>
+            <p className="text-sm text-slate-500">查看最近 200 条 Go 后端运行日志。部署步骤的实时输出仍然在部署面板里查看。</p>
           </div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-950 text-slate-100 p-4 max-h-[28rem] overflow-y-auto font-mono text-xs space-y-2">
@@ -777,9 +777,7 @@ export const ConfigCenter: React.FC = () => {
                 <span className={item.level === 'error' ? 'text-red-300' : item.level === 'warn' ? 'text-amber-300' : 'text-emerald-300'}>
                   {item.level.toUpperCase()}
                 </span>{' '}
-                {item.deploymentId ? <span className="text-blue-300">{item.deploymentId}</span> : null}
-                {item.serverId ? <span className="text-violet-300"> {item.serverId}</span> : null}
-                {item.stepId ? <span className="text-slate-400"> {item.stepId}</span> : null}
+                {item.component ? <span className="text-blue-300">{item.component}</span> : null}
                 <span className="text-slate-100"> {item.message}</span>
               </div>
             ))

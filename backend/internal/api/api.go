@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/dispatch"
 	"modelrun/backend/internal/domain"
+	"modelrun/backend/internal/logging"
 	"modelrun/backend/internal/realtime"
 	"modelrun/backend/internal/runstate"
 	"modelrun/backend/internal/store"
@@ -73,6 +75,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("/api/pipeline-step-templates/", a.handlePipelineStepTemplate)
 	mux.HandleFunc("/api/pipeline-templates", a.handlePipelineTemplates)
 	mux.HandleFunc("/api/logs", a.handleLogs)
+	mux.HandleFunc("/api/backend-logs", a.handleBackendLogs)
 
 	mux.HandleFunc("/ws", a.hub.ServeHTTP)
 
@@ -87,7 +90,7 @@ func (a *API) Routes() http.Handler {
 		})
 	}
 
-	return withCORS(mux)
+	return withRequestLogging(withCORS(mux))
 }
 
 func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -148,4 +151,34 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func withRequestLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		startedAt := time.Now()
+		next.ServeHTTP(recorder, r)
+		logging.Infof(
+			"http",
+			"%s %s -> %s (%dms)",
+			r.Method,
+			r.URL.RequestURI(),
+			strconv.Itoa(recorder.status),
+			time.Since(startedAt).Milliseconds(),
+		)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(status int) {
+	s.status = status
+	s.ResponseWriter.WriteHeader(status)
 }

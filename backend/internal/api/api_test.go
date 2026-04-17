@@ -13,8 +13,10 @@ import (
 
 	"modelrun/backend/internal/deploy"
 	"modelrun/backend/internal/domain"
+	"modelrun/backend/internal/logging"
 	"modelrun/backend/internal/realtime"
 	"modelrun/backend/internal/runstate"
+	"modelrun/backend/internal/runtimefiles"
 	"modelrun/backend/internal/store"
 )
 
@@ -146,6 +148,21 @@ func TestListRemoteTasksEmpty(t *testing.T) {
 	}
 }
 
+func TestBackendLogsEndpoint(t *testing.T) {
+	handler := newTestHandler(t)
+
+	logging.Infof("api-test", "hello backend log")
+
+	entries := mustRequest[[]logging.Entry](t, handler, http.MethodGet, "/api/backend-logs?limit=20", map[string]any{})
+	if len(entries) == 0 {
+		t.Fatal("expected backend logs to be returned")
+	}
+	last := entries[len(entries)-1]
+	if last.Component != "http" && last.Component != "api-test" {
+		t.Fatalf("unexpected backend log component: %#v", last)
+	}
+}
+
 func TestPipelineStepTemplateOverridesPipelineBoardMetadata(t *testing.T) {
 	handler := newTestHandler(t)
 
@@ -221,9 +238,23 @@ func newTestHandler(t *testing.T) http.Handler {
 			t.Fatal(err)
 		}
 	})
+	logger, err := logging.Setup(filepath.Join(t.TempDir(), "logs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	hub := realtime.NewHub()
 	state := runstate.New()
-	executor := deploy.NewExecutor(st, state, hub)
+	runLogs, err := runtimefiles.New(filepath.Join(t.TempDir(), "runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := deploy.NewExecutor(st, state, hub, runLogs)
 
 	return New(st, state, executor, hub, "").Routes()
 }

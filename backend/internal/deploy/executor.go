@@ -9,8 +9,10 @@ import (
 
 	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
+	"modelrun/backend/internal/logging"
 	"modelrun/backend/internal/realtime"
 	"modelrun/backend/internal/runstate"
+	"modelrun/backend/internal/runtimefiles"
 	"modelrun/backend/internal/store"
 )
 
@@ -19,6 +21,7 @@ type Executor struct {
 	state     *runstate.State
 	hub       *realtime.Hub
 	collector *collect.Collector
+	files     *runtimefiles.Manager
 	activeMu  sync.Mutex
 	active    map[string]map[string]func()
 	runtimeMu sync.RWMutex
@@ -34,12 +37,13 @@ type runtimeStepOutput struct {
 
 const maxRuntimeLinesPerStep = 2000
 
-func NewExecutor(st *store.Store, state *runstate.State, hub *realtime.Hub) *Executor {
+func NewExecutor(st *store.Store, state *runstate.State, hub *realtime.Hub, files *runtimefiles.Manager) *Executor {
 	return &Executor{
 		store:     st,
 		state:     state,
 		hub:       hub,
 		collector: collect.New(),
+		files:     files,
 		active:    map[string]map[string]func(){},
 		runtime:   map[string]*runtimeStepOutput{},
 	}
@@ -80,11 +84,15 @@ func (e *Executor) Start(deploymentID string) ([]string, error) {
 	for _, task := range tasks {
 		taskIDs = append(taskIDs, task.ID)
 	}
+	if err := e.files.ResetDeployment(deploymentID); err != nil {
+		logging.Warnf("deploy", "reset runtime files for %s failed: %v", deploymentID, err)
+	}
 	e.clearRuntimeLogs(deploymentID)
 	e.state.DeleteDeployment(deploymentID)
 	e.state.SetTasks(deploymentID, tasks)
 	e.state.SetDeploymentRuntime(deploymentID, "deploying", nil, nil)
 	updated := e.state.OverlayDeployment(deployment)
+	logging.Infof("deploy", "start deployment %s on %d server(s)", deploymentID, len(serverList))
 	e.broadcastStatus(updated)
 	go e.run(deploymentID)
 
@@ -124,6 +132,7 @@ func (e *Executor) Stop(deploymentID string) error {
 	e.state.SetDeploymentRuntime(deploymentID, "stopped", nil, nil)
 
 	e.addLog(deploymentID, "", "", "warn", "deployment stopped")
+	logging.Warnf("deploy", "deployment %s stopped by user", deploymentID)
 	stopped := e.state.OverlayDeployment(deployment)
 	for _, task := range stoppedTasks {
 		for _, step := range task.Steps {
@@ -147,6 +156,7 @@ func (e *Executor) run(deploymentID string) {
 
 	serverList, err := deploymentServers(snapshot.Servers, deployment.Servers)
 	if err != nil {
+		logging.Errorf("deploy", "resolve deployment %s servers failed: %v", deploymentID, err)
 		e.failDeployment(deploymentID, err)
 		return
 	}
@@ -160,6 +170,7 @@ func (e *Executor) run(deploymentID string) {
 			defer wg.Done()
 			if err := e.runServer(deployment, server, serverList, &failed); err != nil {
 				failed.Store(true)
+				logging.Errorf("deploy", "deployment %s server %s failed: %v", deploymentID, firstNonEmpty(server.Name, server.ID), err)
 				e.failDeployment(deploymentID, fmt.Errorf("%s: %w", firstNonEmpty(server.Name, server.ID), err))
 			}
 		}()
@@ -195,6 +206,8 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 		if commandPreview == "" {
 			commandPreview = strings.TrimSpace(step.command)
 		}
+		e.writeStepMeta(deployment.ID, server.ID, step.step, commandPreview, step.command)
+		logging.Infof("deploy", "deployment=%s server=%s step=%s start", deployment.ID, firstNonEmpty(server.Name, server.ID), step.step.ID)
 		e.appendStepOutput(deployment.ID, server.ID, step.step.ID, []string{"$ " + commandPreview})
 		stopCh, releaseStop := e.registerCommand(deployment.ID)
 		_, err := e.collector.RunCommandStreamCancelable(server, jump, step.command, stopCh, func(item collect.CommandStreamLine) {
@@ -208,15 +221,18 @@ func (e *Executor) runServer(deployment domain.DeploymentConfig, server domain.S
 		if err != nil {
 			if errors.Is(err, collect.ErrCommandCancelled) && e.isStopped(deployment.ID) {
 				e.addLog(deployment.ID, server.ID, step.step.ID, "warn", "step stopped by user")
+				logging.Warnf("deploy", "deployment=%s server=%s step=%s stopped", deployment.ID, firstNonEmpty(server.Name, server.ID), step.step.ID)
 				return nil
 			}
 			e.addLog(deployment.ID, server.ID, step.step.ID, "error", err.Error())
 			e.failStep(deployment.ID, server.ID, step.step.ID, stepIndex, err)
+			logging.Errorf("deploy", "deployment=%s server=%s step=%s failed: %v", deployment.ID, firstNonEmpty(server.Name, server.ID), step.step.ID, err)
 			return err
 		}
 
 		e.addLog(deployment.ID, server.ID, step.step.ID, "info", "completed "+step.step.Name)
 		e.completeStep(deployment.ID, server.ID, step.step.ID, stepIndex)
+		logging.Infof("deploy", "deployment=%s server=%s step=%s completed", deployment.ID, firstNonEmpty(server.Name, server.ID), step.step.ID)
 	}
 
 	return nil
@@ -363,6 +379,9 @@ func (e *Executor) appendStepOutput(deploymentID, serverID, stepID string, lines
 		return
 	}
 	e.appendRuntimeStepLogs(deploymentID, serverID, stepID, filtered)
+	if err := e.files.AppendStepLines(deploymentID, serverID, stepID, filtered); err != nil {
+		logging.Warnf("deploy", "append runtime file failed deployment=%s server=%s step=%s: %v", deploymentID, serverID, stepID, err)
+	}
 
 	e.hub.Broadcast(realtime.Message{
 		Type:         "step_log",
@@ -439,7 +458,11 @@ func (e *Executor) HydrateTasks(tasks []domain.DeploymentTask) []domain.Deployme
 		copyTask := task
 		copyTask.Steps = append([]domain.DeploymentStep(nil), task.Steps...)
 		for i := range copyTask.Steps {
-			copyTask.Steps[i].Logs = append([]string{}, task.Steps[i].Logs...)
+			if len(task.Steps[i].Logs) > 0 {
+				copyTask.Steps[i].Logs = append([]string{}, task.Steps[i].Logs...)
+			} else {
+				copyTask.Steps[i].Logs = e.files.ReadStepTail(task.DeploymentID, task.ServerID, copyTask.Steps[i].ID, maxRuntimeLinesPerStep)
+			}
 			if entry := e.runtime[taskStepKey(task.DeploymentID, task.ServerID, copyTask.Steps[i].ID)]; entry != nil {
 				copyTask.Steps[i].Logs = append(copyTask.Steps[i].Logs, entry.Lines...)
 			}
@@ -498,6 +521,7 @@ func (e *Executor) completeDeployment(deploymentID string) {
 	deployment = e.state.OverlayDeployment(deployment)
 
 	e.addLog(deploymentID, "", "", "info", "deployment is running")
+	logging.Infof("deploy", "deployment %s is running", deploymentID)
 	e.broadcastStatus(deployment)
 }
 
@@ -511,8 +535,24 @@ func (e *Executor) failDeployment(deploymentID string, runErr error) {
 	deployment = e.state.OverlayDeployment(deployment)
 	if runErr != nil {
 		e.addLog(deploymentID, "", "", "error", runErr.Error())
+		logging.Errorf("deploy", "deployment %s failed: %v", deploymentID, runErr)
 	}
 	e.broadcastStatus(deployment)
+}
+
+func (e *Executor) writeStepMeta(deploymentID, serverID string, step domain.DeploymentStep, commandPreview, command string) {
+	if err := e.files.WriteStepMeta(runtimefiles.StepMeta{
+		DeploymentID:   deploymentID,
+		ServerID:       serverID,
+		StepID:         step.ID,
+		StepName:       step.Name,
+		Description:    step.Description,
+		CommandPreview: commandPreview,
+		Command:        command,
+		StartedAt:      domain.Now(),
+	}); err != nil {
+		logging.Warnf("deploy", "write step meta failed deployment=%s server=%s step=%s: %v", deploymentID, serverID, step.ID, err)
+	}
 }
 
 func (e *Executor) isStopped(deploymentID string) bool {
