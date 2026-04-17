@@ -845,7 +845,7 @@ export const ServerManager: React.FC = () => {
                     value={formData.npuExporterEndpoint || ''}
                     onChange={(e) => setFormData({ ...formData, npuExporterEndpoint: e.target.value })}
                     className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
-                    placeholder="默认 http://127.0.0.1:9101/metrics"
+                placeholder="默认 http://127.0.0.1:8082/metrics，系统会自动回退探测 9101"
                   />
                   <p className="text-xs text-slate-500 mt-1">
                     这个地址从目标服务器本机访问；通过跳板机连接时也仍然是目标机本地地址。

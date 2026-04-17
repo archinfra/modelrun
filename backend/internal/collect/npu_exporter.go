@@ -13,8 +13,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const defaultNPUExporterEndpoint = "http://127.0.0.1:9101/metrics"
-const alternateNPUExporterEndpoint = "http://127.0.0.1:8082/metrics"
+const defaultNPUExporterEndpoint = "http://127.0.0.1:8082/metrics"
+const alternateNPUExporterEndpoint = "http://127.0.0.1:9101/metrics"
+const defaultNPUExporterImage = "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v7.3.0"
+
+func DefaultNPUExporterEndpoint() string {
+	return defaultNPUExporterEndpoint
+}
+
+func DefaultNPUExporterImage() string {
+	return defaultNPUExporterImage
+}
 
 type NPUExporterStatus struct {
 	Endpoint         string           `json:"endpoint"`
@@ -138,7 +147,6 @@ func npuExporterEndpoints(configured string) []string {
 
 	if strings.TrimSpace(configured) != "" {
 		add(configured)
-		return candidates
 	}
 
 	if env := strings.TrimSpace(os.Getenv("MODELRUN_NPU_EXPORTER_ENDPOINT")); env != "" {
@@ -183,6 +191,16 @@ func npuExporterStatusFromClient(client sshRunner, configured string) NPUExporte
 	status := NPUExporterStatus{Endpoint: firstNPUExporterEndpoint(configured)}
 	accelerators, endpoint, err := collectNPUExporterWithEndpoint(client, configured)
 	if err != nil {
+		for _, probeEndpoint := range npuExporterEndpoints(configured) {
+			out, fetchErr := fetchNPUExporterMetrics(client, probeEndpoint)
+			if fetchErr != nil {
+				continue
+			}
+			status.Endpoint = probeEndpoint
+			status.Reachable = true
+			status.Message = explainNPUExporterParseFailure(out)
+			return status
+		}
 		status.Message = err.Error()
 		return status
 	}
@@ -217,7 +235,7 @@ func buildNPUExporterInstallCommand(opts NPUExporterInstallOptions, endpoint str
 		}
 		port := opts.Port
 		if port == 0 {
-			port = 9101
+			port = 8082
 		}
 		if strings.TrimSpace(opts.Endpoint) == "" {
 			endpoint = fmt.Sprintf("http://127.0.0.1:%d/metrics", port)
@@ -254,7 +272,7 @@ func parseNPUExporterMetrics(out string) []domain.GPUInfo {
 
 	for _, line := range strings.Split(out, "\n") {
 		sample, ok := parsePrometheusSample(line)
-		if !ok || !strings.HasPrefix(sample.name, "npu_chip_info_") {
+		if !ok || !looksLikeNPUMetric(sample.name) {
 			continue
 		}
 		index, ok := metricNPUIndex(sample.labels)
@@ -269,22 +287,22 @@ func parseNPUExporterMetrics(out string) []domain.GPUInfo {
 			}
 			devices[index] = device
 		}
-		if name := firstNonEmpty(sample.labels["name"], sample.labels["modelName"]); name != "" {
+		if name := metricNPUName(sample.labels); name != "" {
 			device.info.Name = normalizeNPUName(name)
 		}
 
 		switch sample.name {
 		case "npu_chip_info_name":
 			if sample.value > 0 {
-				if name := firstNonEmpty(sample.labels["name"], sample.labels["modelName"]); name != "" {
+				if name := metricNPUName(sample.labels); name != "" {
 					device.info.Name = normalizeNPUName(name)
 				}
 			}
-		case "npu_chip_info_utilization", "npu_chip_info_overall_utilization":
+		case "npu_chip_info_utilization", "npu_chip_info_overall_utilization", "npu_chip_info_aicore_utilization", "npu_chip_info_core_utilization":
 			device.info.Utilization = sample.value
-		case "npu_chip_info_temperature":
+		case "npu_chip_info_temperature", "npu_chip_info_chip_temperature", "npu_chip_info_temp":
 			device.info.Temperature = sample.value
-		case "npu_chip_info_power":
+		case "npu_chip_info_power", "npu_chip_info_power_usage", "npu_chip_info_power_draw":
 			device.info.PowerDraw = sample.value
 		case "npu_chip_info_hbm_total_memory":
 			device.info.MemoryTotal = normalizeAcceleratorMemory(sample.value)
@@ -307,7 +325,7 @@ func parseNPUExporterMetrics(out string) []domain.GPUInfo {
 			if !device.hasHBMFree && (device.info.MemoryFree == 0 || sample.value > 0) {
 				device.info.MemoryFree = normalizeAcceleratorMemory(sample.value)
 			}
-		case "npu_chip_info_health_status":
+		case "npu_chip_info_health_status", "npu_chip_info_health":
 			if sample.value == 1 {
 				device.info.Health = "OK"
 			} else {
@@ -430,13 +448,61 @@ func readPrometheusLabelValue(input string) (string, string, bool) {
 }
 
 func metricNPUIndex(labels map[string]string) (int, bool) {
-	for _, key := range []string{"npuID", "npu_id", "logicID", "logic_id", "device_id", "id"} {
+	for _, key := range []string{"npuID", "npu_id", "logicID", "logic_id", "device_id", "deviceId", "chip_id", "chipID", "id"} {
 		if value := labels[key]; value != "" {
 			index, err := strconv.Atoi(value)
 			return index, err == nil
 		}
 	}
 	return 0, false
+}
+
+func looksLikeNPUMetric(name string) bool {
+	return strings.HasPrefix(name, "npu_chip_info_") || strings.HasPrefix(name, "npu_chip_")
+}
+
+func metricNPUName(labels map[string]string) string {
+	return firstNonEmpty(
+		labels["name"],
+		labels["modelName"],
+		labels["model_name"],
+		labels["product_name"],
+		labels["chip_type"],
+	)
+}
+
+func explainNPUExporterParseFailure(out string) string {
+	families := collectMetricFamilies(out, 6)
+	if len(families) == 0 {
+		return "npu exporter endpoint is reachable, but returned no recognizable Prometheus metrics"
+	}
+	return fmt.Sprintf("npu exporter endpoint is reachable, but ModelRun could not map the current metric format to devices. detected metric families: %s", strings.Join(families, ", "))
+}
+
+func collectMetricFamilies(out string, limit int) []string {
+	seen := map[string]struct{}{}
+	families := make([]string, 0, limit)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		nameEnd := strings.IndexAny(line, "{ ")
+		if nameEnd <= 0 {
+			continue
+		}
+		name := line[:nameEnd]
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		families = append(families, name)
+		if len(families) >= limit {
+			break
+		}
+	}
+	sort.Strings(families)
+	return families
 }
 
 func firstNonEmpty(values ...string) string {

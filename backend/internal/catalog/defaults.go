@@ -17,7 +17,10 @@ func EnsureDefaults(data *domain.Data) bool {
 		actionIndex[item.ID] = i
 	}
 	for _, item := range DefaultActionTemplates() {
-		if _, ok := actionIndex[item.ID]; ok {
+		if idx, ok := actionIndex[item.ID]; ok {
+			if refreshBuiltInActionTemplate(&data.ActionTemplates[idx], item) {
+				changed = true
+			}
 			continue
 		}
 		data.ActionTemplates = append(data.ActionTemplates, item)
@@ -29,7 +32,10 @@ func EnsureDefaults(data *domain.Data) bool {
 		bootstrapIndex[item.ID] = i
 	}
 	for _, item := range DefaultBootstrapConfigs() {
-		if _, ok := bootstrapIndex[item.ID]; ok {
+		if idx, ok := bootstrapIndex[item.ID]; ok {
+			if refreshBuiltInBootstrapConfig(&data.BootstrapConfigs[idx], item) {
+				changed = true
+			}
 			continue
 		}
 		data.BootstrapConfigs = append(data.BootstrapConfigs, item)
@@ -107,7 +113,7 @@ func DefaultActionTemplates() []domain.ActionTemplate {
 					Label:        "Image",
 					Description:  "Exporter image to run on the target server.",
 					Required:     true,
-					DefaultValue: "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1",
+					DefaultValue: collect.DefaultNPUExporterImage(),
 					Placeholder:  "registry/path/image:tag",
 				},
 				{
@@ -260,11 +266,11 @@ func DefaultBootstrapConfigs() []domain.BootstrapConfig {
 			BuiltIn:          true,
 			ActionTemplateID: "install_npu_exporter",
 			DefaultArgs: map[string]string{
-				"image":         "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1",
+				"image":         collect.DefaultNPUExporterImage(),
 				"containerName": "modelrun-npu-exporter",
 			},
-			Endpoint:  "http://127.0.0.1:9101/metrics",
-			Port:      9101,
+			Endpoint:  collect.DefaultNPUExporterEndpoint(),
+			Port:      8082,
 			CreatedAt: now,
 			UpdatedAt: now,
 		},
@@ -461,6 +467,61 @@ func LookupActionTemplate(actions []domain.ActionTemplate, id string) (domain.Ac
 var actionTemplateAliases = map[string]string{
 	"docker_install_npu_exporter":  "install_npu_exporter",
 	"docker_install_node_exporter": "install_node_exporter",
+}
+
+func refreshBuiltInActionTemplate(current *domain.ActionTemplate, defaults domain.ActionTemplate) bool {
+	_ = defaults
+	if !current.BuiltIn || current.ID != "install_npu_exporter" {
+		return false
+	}
+	changed := false
+	for i := range current.Fields {
+		if current.Fields[i].Key != "image" {
+			continue
+		}
+		if current.Fields[i].DefaultValue == "" || current.Fields[i].DefaultValue == "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1" {
+			if current.Fields[i].DefaultValue != collect.DefaultNPUExporterImage() {
+				current.Fields[i].DefaultValue = collect.DefaultNPUExporterImage()
+				changed = true
+			}
+		}
+	}
+	if changed {
+		current.UpdatedAt = domain.Now()
+	}
+	return changed
+}
+
+func refreshBuiltInBootstrapConfig(current *domain.BootstrapConfig, defaults domain.BootstrapConfig) bool {
+	if !current.BuiltIn || current.ID != "bootstrap_npu_exporter" {
+		return false
+	}
+	changed := false
+	if current.DefaultArgs == nil {
+		current.DefaultArgs = map[string]string{}
+	}
+	if value := strings.TrimSpace(current.DefaultArgs["image"]); value == "" || value == "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1" {
+		if current.DefaultArgs["image"] != collect.DefaultNPUExporterImage() {
+			current.DefaultArgs["image"] = collect.DefaultNPUExporterImage()
+			changed = true
+		}
+	}
+	if strings.TrimSpace(current.Endpoint) == "" || current.Endpoint == "http://127.0.0.1:9101/metrics" {
+		if current.Endpoint != defaults.Endpoint {
+			current.Endpoint = defaults.Endpoint
+			changed = true
+		}
+	}
+	if current.Port == 0 || current.Port == 9101 {
+		if current.Port != defaults.Port {
+			current.Port = defaults.Port
+			changed = true
+		}
+	}
+	if changed {
+		current.UpdatedAt = domain.Now()
+	}
+	return changed
 }
 
 func BuildActionCommand(action domain.ActionTemplate, args map[string]string) (string, error) {

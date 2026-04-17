@@ -78,6 +78,36 @@ npu_chip_info_used_memory{id="0"} 0 1776313463623
 	}
 }
 
+func TestParseNPUExporterMetricsSupportsSnakeCaseLabelsAndAlternateMetricNames(t *testing.T) {
+	out := `
+npu_chip_info_name{id="1",model_name="Ascend 910B4"} 1
+npu_chip_info_aicore_utilization{id="1",model_name="Ascend 910B4"} 72
+npu_chip_info_chip_temperature{id="1"} 41
+npu_chip_info_power_usage{id="1"} 205.5
+npu_chip_info_hbm_total_memory{id="1"} 68719476736
+npu_chip_info_hbm_used_memory{id="1"} 17179869184
+npu_chip_info_health{id="1"} 1
+`
+
+	devices := parseNPUExporterMetrics(out)
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	device := devices[0]
+	if device.Name != "Ascend 910B4" || device.Index != 1 {
+		t.Fatalf("unexpected identity: %#v", device)
+	}
+	if device.Utilization != 72 || device.Temperature != 41 || device.PowerDraw != 205.5 {
+		t.Fatalf("unexpected live metrics: %#v", device)
+	}
+	if device.MemoryTotal != 65536 || device.MemoryUsed != 16384 || device.MemoryFree != 49152 {
+		t.Fatalf("unexpected memory normalization: %#v", device)
+	}
+	if device.Health != "OK" {
+		t.Fatalf("expected health OK, got %#v", device)
+	}
+}
+
 func TestNormalizeAcceleratorMemory(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -115,5 +145,18 @@ func TestNPUExporterEndpoints(t *testing.T) {
 	}
 	if !foundAlternate {
 		t.Fatalf("expected alternate endpoint in candidates, got %#v", endpoints)
+	}
+}
+
+func TestNPUExporterEndpointsKeepConfiguredEndpointAndFallbacks(t *testing.T) {
+	endpoints := npuExporterEndpoints("http://127.0.0.1:9101/metrics")
+	if len(endpoints) < 2 {
+		t.Fatalf("expected configured endpoint plus fallback candidates, got %#v", endpoints)
+	}
+	if endpoints[0] != "http://127.0.0.1:9101/metrics" {
+		t.Fatalf("expected configured endpoint first, got %#v", endpoints)
+	}
+	if endpoints[1] != defaultNPUExporterEndpoint {
+		t.Fatalf("expected default endpoint as next fallback, got %#v", endpoints)
 	}
 }
