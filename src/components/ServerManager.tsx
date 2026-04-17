@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity,
@@ -30,16 +30,6 @@ type ServerTestResponse = {
   driverVersion?: string;
   cudaVersion?: string;
   dockerVersion?: string;
-  server?: ServerConfig;
-};
-
-type NetdataStatusResponse = {
-  endpoint: string;
-  reachable: boolean;
-  message: string;
-  hostname?: string;
-  version?: string;
-  dashboardPath: string;
   server?: ServerConfig;
 };
 
@@ -93,7 +83,7 @@ const buildServerPayload = (
   return {
     id: existing?.id || Date.now().toString(),
     projectId: existing?.projectId || projectId,
-    name: formData.name?.trim() || '未命名服务器',
+    name: formData.name?.trim() || '鏈懡鍚嶆湇鍔″櫒',
     host: formData.host?.trim() || '',
     sshPort: Number(formData.sshPort) || 22,
     username: formData.username?.trim() || 'root',
@@ -123,11 +113,9 @@ const ServerCard: React.FC<{
   jumpName?: string;
   isChecking: boolean;
   onProbe: (server: ServerConfig) => void;
-  onRefreshNetdata: (server: ServerConfig) => void;
-  onInstallNetdata: (server: ServerConfig) => void;
   onEdit: (server: ServerConfig) => void;
   onDelete: (id: string) => void;
-}> = ({ server, jumpName, isChecking, onProbe, onRefreshNetdata, onInstallNetdata, onEdit, onDelete }) => {
+}> = ({ server, jumpName, isChecking, onProbe, onEdit, onDelete }) => {
   const [expanded, setExpanded] = useState(false);
   const accelerators = server.gpuInfo || [];
   const gpuCount = accelerators.filter((gpu) => gpu.type !== 'npu').length;
@@ -190,17 +178,6 @@ const ServerCard: React.FC<{
                     ? {jumpName || '???'} ??
                   </span>
                 )}
-                <span
-                  className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                    server.netdataStatus === 'online'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : server.netdataStatus === 'offline'
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-slate-100 text-slate-600'
-                  }`}
-                >
-                  Netdata {server.netdataStatus === 'online' ? '??' : server.netdataStatus === 'offline' ? '??' : '???'}
-                </span>
               </div>
             </div>
           </div>
@@ -212,13 +189,6 @@ const ServerCard: React.FC<{
             >
               <RefreshCw className={`w-4 h-4 ${isChecking ? 'animate-spin' : ''}`} />
               SSH ??
-            </button>
-            <button
-              onClick={() => onInstallNetdata(server)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
-            >
-              <Activity className="w-4 h-4" />
-              ?? Netdata
             </button>
             <button
               onClick={() => setExpanded(!expanded)}
@@ -302,53 +272,7 @@ const ServerCard: React.FC<{
                   NPU Exporter: {server.npuExporterStatus || '???'}
                   {server.npuExporterEndpoint ? ` (${server.npuExporterEndpoint})` : ''}
                 </span>
-                <span>
-                  Netdata: {server.netdataStatus || '???'}
-                  {server.netdataEndpoint ? ` (${server.netdataEndpoint})` : ''}
-                </span>
                 <span>????: {server.lastCheck ? new Date(server.lastCheck).toLocaleString() : '???'}</span>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h4 className="font-medium text-slate-900">Netdata ??</h4>
-                    <p className="text-sm text-slate-500">??????????? Netdata ????????</p>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={() => onRefreshNetdata(server)}
-                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                      ?? Netdata ??
-                    </button>
-                    <a
-                      href={`/api/servers/${server.id}/netdata/dashboard/v1/`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                    >
-                      <Activity className="w-4 h-4" />
-                      ?????
-                    </a>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 overflow-hidden bg-slate-950">
-                  {server.netdataStatus === 'online' ? (
-                    <iframe
-                      key={`${server.id}-${server.netdataLastCheck || 'dashboard'}`}
-                      src={`/api/servers/${server.id}/netdata/dashboard/v1/`}
-                      title={`netdata-${server.name}`}
-                      className="w-full h-[640px] border-0 bg-white"
-                    />
-                  ) : (
-                    <div className="p-5 text-sm text-slate-300">
-                      Netdata ???????????? Netdata??????????????????????
-                    </div>
-                  )}
-                </div>
               </div>
 
               <div className="space-y-3">
@@ -466,7 +390,7 @@ export const ServerManager: React.FC = () => {
       })
       .catch((err) => {
         if (!active) return;
-        setError(`后端服务器列表暂时不可用：${err.message}`);
+        setError(`鍚庣鏈嶅姟鍣ㄥ垪琛ㄦ殏鏃朵笉鍙敤锛?{err.message}`);
       });
     return () => {
       active = false;
@@ -544,14 +468,14 @@ export const ServerManager: React.FC = () => {
           body: JSON.stringify(payload),
         });
         updateServer(editingServer.id, updated);
-        setNotice(`已更新服务器 ${updated.name}`);
+        setNotice(`宸叉洿鏂版湇鍔″櫒 ${updated.name}`);
       } else {
         const created = await requestJSON<ServerConfig>(`/api/servers?projectId=${encodeURIComponent(payload.projectId)}`, {
           method: 'POST',
           body: JSON.stringify(payload),
         });
         addServer(created);
-        setNotice(`已添加服务器 ${created.name}`);
+        setNotice(`宸叉坊鍔犳湇鍔″櫒 ${created.name}`);
       }
       closeModal();
     } catch (err) {
@@ -594,49 +518,6 @@ export const ServerManager: React.FC = () => {
     }
   };
 
-  const handleRefreshNetdata = async (server: ServerConfig) => {
-    setNotice('');
-    setError('');
-    try {
-      const result = await requestJSON<NetdataStatusResponse>(`/api/servers/${server.id}/netdata`);
-      if (result.server) {
-        updateServer(server.id, result.server);
-      } else {
-        updateServer(server.id, {
-          netdataEndpoint: result.endpoint,
-          netdataStatus: result.reachable ? 'online' : 'offline',
-          netdataLastCheck: new Date().toISOString(),
-        });
-      }
-      setNotice(result.message || 'Netdata 状态已刷新');
-    } catch (err) {
-      updateServer(server.id, {
-        netdataStatus: 'offline',
-        netdataLastCheck: new Date().toISOString(),
-      });
-      setError(err instanceof Error ? err.message : '刷新 Netdata 状态失败');
-    }
-  };
-
-  const handleInstallNetdata = async (server: ServerConfig) => {
-    setNotice('');
-    setError('');
-    try {
-      await requestJSON('/api/remote-tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: `安装 Netdata - ${server.name}`,
-          scope: 'selected',
-          executionType: 'preset',
-          presetId: 'install_netdata',
-          serverIds: [server.id],
-        }),
-      });
-      setNotice(`已向 ${server.name} 下发 Netdata 安装任务。安装完成后刷新状态即可查看看板。`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '下发 Netdata 安装任务失败');
-    }
-  };
 
   const handleDelete = async (id: string) => {
     const server = servers.find((item) => item.id === id);
@@ -687,7 +568,7 @@ export const ServerManager: React.FC = () => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
-            placeholder="搜索服务器..."
+            placeholder="鎼滅储鏈嶅姟鍣?.."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -695,7 +576,7 @@ export const ServerManager: React.FC = () => {
         </div>
         <div className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-slate-600 bg-white">
           <Filter className="w-4 h-4" />
-          {projectServers.filter((server) => server.isJumpHost).length} 台跳板机
+          {projectServers.filter((server) => server.isJumpHost).length} 鍙拌烦鏉挎満
         </div>
       </div>
 
@@ -704,7 +585,7 @@ export const ServerManager: React.FC = () => {
           <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 border-dashed">
             <Server className="w-16 h-16 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-slate-900 mb-1">暂无服务器</h3>
-            <p className="text-slate-500 mb-4">添加服务器后，点击采集信息即可通过 SSH 获取 GPU/NPU 和系统信息。</p>
+            <p className="text-slate-500 mb-4">添加服务器后，点击采集信息即可通过 SSH 获取 GPU、NPU 和系统信息。</p>
             <button
               onClick={openCreate}
               disabled={!currentProjectId}
@@ -721,8 +602,6 @@ export const ServerManager: React.FC = () => {
               jumpName={servers.find((candidate) => candidate.id === server.jumpHostId)?.name}
               isChecking={checkingId === server.id}
               onProbe={handleProbe}
-              onRefreshNetdata={handleRefreshNetdata}
-              onInstallNetdata={handleInstallNetdata}
               onEdit={openEdit}
               onDelete={handleDelete}
             />
@@ -758,7 +637,7 @@ export const ServerManager: React.FC = () => {
                     value={formData.name || ''}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
-                    placeholder="例如: npu-node-01"
+                    placeholder="渚嬪: npu-node-01"
                   />
                 </div>
 
@@ -771,7 +650,7 @@ export const ServerManager: React.FC = () => {
                       value={formData.host || ''}
                       onChange={(e) => setFormData({ ...formData, host: e.target.value })}
                       className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
-                      placeholder="公网 IP 或内网 IP"
+                      placeholder="鍏綉 IP 鎴栧唴缃?IP"
                     />
                   </div>
                   <div>
@@ -805,15 +684,15 @@ export const ServerManager: React.FC = () => {
                       }
                       className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white"
                     >
-                      <option value="password">密码</option>
-                      <option value="key">私钥</option>
+                      <option value="password">瀵嗙爜</option>
+                      <option value="key">绉侀挜</option>
                     </select>
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">
-                    {formData.authType === 'key' ? '私钥口令或密码备用' : '密码'}
+                    {formData.authType === 'key' ? '私钥口令或密码（可选）' : '密码'}
                   </label>
                   <input
                     type="password"
@@ -838,33 +717,20 @@ export const ServerManager: React.FC = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">
-                    NPU Exporter Metrics 地址（可选）
+                    NPU Exporter Metrics 鍦板潃锛堝彲閫夛級
                   </label>
                   <input
                     type="text"
                     value={formData.npuExporterEndpoint || ''}
                     onChange={(e) => setFormData({ ...formData, npuExporterEndpoint: e.target.value })}
                     className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
-                placeholder="默认 http://127.0.0.1:8082/metrics，系统会自动回退探测 9101"
+                placeholder="榛樿 http://127.0.0.1:8082/metrics锛岀郴缁熶細鑷姩鍥為€€鎺㈡祴 9101"
                   />
                   <p className="text-xs text-slate-500 mt-1">
-                    这个地址从目标服务器本机访问；通过跳板机连接时也仍然是目标机本地地址。
+                    杩欎釜鍦板潃浠庣洰鏍囨湇鍔″櫒鏈満璁块棶锛涢€氳繃璺虫澘鏈鸿繛鎺ユ椂涔熶粛鐒舵槸鐩爣鏈烘湰鍦板湴鍧€銆?
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Netdata ??????</label>
-                  <input
-                    type="text"
-                    value={formData.netdataEndpoint || ''}
-                    onChange={(e) => setFormData({ ...formData, netdataEndpoint: e.target.value })}
-                    className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
-                    placeholder="?? http://127.0.0.1:19999"
-                  />
-                  <p className="text-xs text-slate-500 mt-1">
-                    ????? SSH ????????? Netdata ?????????????
-                  </p>
-                </div>
 
                 <div className="grid gap-3 rounded-xl border border-slate-200 p-4">
                   <label className="flex items-start gap-3">
@@ -877,10 +743,10 @@ export const ServerManager: React.FC = () => {
                     <span>
                       <span className="flex items-center gap-2 text-sm font-medium text-slate-800">
                         <ShieldCheck className="w-4 h-4 text-indigo-500" />
-                        这台服务器可作为跳板机
+                        杩欏彴鏈嶅姟鍣ㄥ彲浣滀负璺虫澘鏈?
                       </span>
                       <span className="block text-sm text-slate-500 mt-1">
-                        后续内网服务器可以通过它建立 SSH 转发。
+                        鍚庣画鍐呯綉鏈嶅姟鍣ㄥ彲浠ラ€氳繃瀹冨缓绔?SSH 杞彂銆?
                       </span>
                     </span>
                   </label>
@@ -901,10 +767,10 @@ export const ServerManager: React.FC = () => {
                     <span>
                       <span className="flex items-center gap-2 text-sm font-medium text-slate-800">
                         <Network className="w-4 h-4 text-blue-500" />
-                        通过跳板机连接
+                        閫氳繃璺虫澘鏈鸿繛鎺?
                       </span>
                       <span className="block text-sm text-slate-500 mt-1">
-                        当前服务器可以填写内网 IP，后端会先连跳板机，再从跳板机连目标 SSH。
+                        褰撳墠鏈嶅姟鍣ㄥ彲浠ュ～鍐欏唴缃?IP锛屽悗绔細鍏堣繛璺虫澘鏈猴紝鍐嶄粠璺虫澘鏈鸿繛鐩爣 SSH銆?
                       </span>
                     </span>
                   </label>
@@ -926,7 +792,7 @@ export const ServerManager: React.FC = () => {
                       </select>
                       {jumpCandidates.length === 0 && (
                         <p className="text-sm text-red-500 mt-2">
-                          当前项目还没有可用跳板机，请先添加一台服务器并勾选“可作为跳板机”。
+                          褰撳墠椤圭洰杩樻病鏈夊彲鐢ㄨ烦鏉挎満锛岃鍏堟坊鍔犱竴鍙版湇鍔″櫒骞跺嬀閫夆€滃彲浣滀负璺虫澘鏈衡€濄€?
                         </p>
                       )}
                     </div>

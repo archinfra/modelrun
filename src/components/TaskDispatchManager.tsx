@@ -55,7 +55,8 @@ const buildPresetArgs = (
 ): Record<string, string> => {
   if (!preset?.fields?.length) return {};
   return preset.fields.reduce<Record<string, string>>((acc, field) => {
-    acc[field.key] = current[field.key] ?? field.defaultValue ?? '';
+    const currentValue = current[field.key];
+    acc[field.key] = currentValue && currentValue.trim() ? currentValue : field.defaultValue ?? '';
     return acc;
   }, {});
 };
@@ -570,9 +571,9 @@ export const TaskDispatchManager: React.FC = () => {
               <p className="mt-1">
                 The default preset is prefilled with
                 {' '}
-                <code className="text-xs">swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1</code>
+                <code className="text-xs">swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v7.3.0</code>
                 {' '}
-                for one-click rollout.
+                plus the recommended <code className="text-xs">listenIP=0.0.0.0</code> and <code className="text-xs">port=8082</code>.
               </p>
             </div>
             <div className="rounded-xl bg-slate-50 p-4">

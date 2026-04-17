@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"modelrun/backend/internal/collect"
 	"modelrun/backend/internal/domain"
 )
 
@@ -26,7 +27,7 @@ var presetCatalog = map[string]presetDefinition{
 					Label:        "Image",
 					Description:  "Exporter image to run on the target server.",
 					Required:     true,
-					DefaultValue: "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1",
+					DefaultValue: collect.DefaultNPUExporterImage(),
 					Placeholder:  "registry/path/image:tag",
 				},
 				{
@@ -35,6 +36,20 @@ var presetCatalog = map[string]presetDefinition{
 					Description:  "Container name used on every target server.",
 					DefaultValue: "modelrun-npu-exporter",
 					Placeholder:  "modelrun-npu-exporter",
+				},
+				{
+					Key:          "listenIP",
+					Label:        "Listen IP",
+					Description:  "Listen IP passed to npu-exporter.",
+					DefaultValue: "0.0.0.0",
+					Placeholder:  "0.0.0.0",
+				},
+				{
+					Key:          "port",
+					Label:        "Listen Port",
+					Description:  "Listen port passed to npu-exporter.",
+					DefaultValue: "8082",
+					Placeholder:  "8082",
 				},
 			},
 		},
@@ -47,13 +62,28 @@ var presetCatalog = map[string]presetDefinition{
 			if containerName == "" {
 				containerName = "modelrun-npu-exporter"
 			}
+			listenIP := strings.TrimSpace(args["listenIP"])
+			if listenIP == "" {
+				listenIP = "0.0.0.0"
+			}
+			port := strings.TrimSpace(args["port"])
+			if port == "" {
+				port = "8082"
+			}
 			return withDockerPrivileges(
 				"(run_docker rm -f " + collectShellQuote(containerName) + " >/dev/null 2>&1 || true) && " +
 					"run_docker run -d --name " + collectShellQuote(containerName) + " --restart unless-stopped --network host --privileged " +
 					"-v /dev:/dev " +
 					"-v /usr/local/Ascend:/usr/local/Ascend:ro " +
+					"-v /usr/local/dcmi:/usr/local/dcmi:ro " +
+					"-v /sys:/sys:ro " +
+					"-v /tmp:/tmp " +
+					"-v /var/run/docker.sock:/var/run/docker.sock " +
 					"-v /etc/localtime:/etc/localtime:ro " +
-					collectShellQuote(image),
+					collectShellQuote(image) + " " +
+					"-ip=" + collectShellQuote(listenIP) + " " +
+					"-port=" + collectShellQuote(port) + " " +
+					"-containerMode=docker",
 			), nil
 		},
 	},

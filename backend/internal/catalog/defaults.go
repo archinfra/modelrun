@@ -9,6 +9,8 @@ import (
 	"modelrun/backend/internal/domain"
 )
 
+const defaultNetdataImage = "netdata/netdata:stable"
+
 func EnsureDefaults(data *domain.Data) bool {
 	changed := false
 
@@ -105,7 +107,12 @@ func DefaultActionTemplates() []domain.ActionTemplate {
 					"run_docker run -d --name {{containerName}} --restart unless-stopped --network host --privileged " +
 					"-v /dev:/dev " +
 					"-v /usr/local/Ascend:/usr/local/Ascend:ro " +
-					"-v /etc/localtime:/etc/localtime:ro {{image}}",
+					"-v /usr/local/dcmi:/usr/local/dcmi:ro " +
+					"-v /sys:/sys:ro " +
+					"-v /tmp:/tmp " +
+					"-v /var/run/docker.sock:/var/run/docker.sock " +
+					"-v /etc/localtime:/etc/localtime:ro {{image}} " +
+					"-ip={{listenIP}} -port={{port}} -containerMode=docker",
 			),
 			Fields: []domain.ActionTemplateField{
 				{
@@ -123,6 +130,20 @@ func DefaultActionTemplates() []domain.ActionTemplate {
 					DefaultValue: "modelrun-npu-exporter",
 					Placeholder:  "modelrun-npu-exporter",
 				},
+				{
+					Key:          "listenIP",
+					Label:        "Listen IP",
+					Description:  "Listen IP passed to npu-exporter.",
+					DefaultValue: "0.0.0.0",
+					Placeholder:  "0.0.0.0",
+				},
+				{
+					Key:          "port",
+					Label:        "Listen Port",
+					Description:  "Listen port passed to npu-exporter.",
+					DefaultValue: "8082",
+					Placeholder:  "8082",
+				},
 			},
 			Tags:      []string{"exporter", "npu", "builtin"},
 			CreatedAt: now,
@@ -131,25 +152,40 @@ func DefaultActionTemplates() []domain.ActionTemplate {
 		{
 			ID:            "install_netdata",
 			Name:          "Install Netdata",
-			Description:   "Install the Netdata agent with the official kickstart script.",
+			Description:   "Pull and run Netdata in Docker with host access and restart policy.",
 			Category:      "observability",
 			BuiltIn:       true,
 			ExecutionType: "command",
-			CommandTemplate: strings.Join([]string{
-				"installer=/tmp/netdata-kickstart.sh;",
-				"if command -v curl >/dev/null 2>&1; then",
-				"curl -fsSL https://get.netdata.cloud/kickstart.sh -o \"$installer\";",
-				"elif command -v wget >/dev/null 2>&1; then",
-				"wget -q -O \"$installer\" https://get.netdata.cloud/kickstart.sh;",
-				"else echo 'curl or wget is required to install netdata' >&2; exit 127; fi;",
-				"chmod +x \"$installer\";",
-				"if [ \"$(id -u)\" -eq 0 ]; then",
-				"env DISABLE_TELEMETRY=1 sh \"$installer\" --non-interactive --release-channel stable --no-updates;",
-				"elif command -v sudo >/dev/null 2>&1; then",
-				"sudo -n env DISABLE_TELEMETRY=1 sh \"$installer\" --non-interactive --release-channel stable --no-updates || { echo 'netdata installation requires passwordless sudo for the current SSH user.' >&2; exit 1; };",
-				"else echo 'netdata installation requires root or passwordless sudo.' >&2; exit 1; fi;",
-				"rm -f \"$installer\";",
-			}, " "),
+			CommandTemplate: withDockerPrivilegesCommand(
+				"(run_docker rm -f {{containerName}} >/dev/null 2>&1 || true) && " +
+					"run_docker run -d --name {{containerName}} --restart unless-stopped --network host --pid host --cap-add SYS_PTRACE --cap-add SYS_ADMIN " +
+					"-e DO_NOT_TRACK=1 " +
+					"-v /:/host/root:ro,rslave " +
+					"-v /var/run/docker.sock:/var/run/docker.sock:ro " +
+					"-v /proc:/host/proc:ro " +
+					"-v /sys:/host/sys:ro " +
+					"-v /etc/passwd:/host/etc/passwd:ro " +
+					"-v /etc/group:/host/etc/group:ro " +
+					"-v /etc/localtime:/etc/localtime:ro " +
+					"{{image}}",
+			),
+			Fields: []domain.ActionTemplateField{
+				{
+					Key:          "image",
+					Label:        "Image",
+					Description:  "Netdata image to run on the target server.",
+					Required:     true,
+					DefaultValue: defaultNetdataImage,
+					Placeholder:  "registry/path/image:tag",
+				},
+				{
+					Key:          "containerName",
+					Label:        "Container name",
+					Description:  "Container name used on the target server.",
+					DefaultValue: "modelrun-netdata",
+					Placeholder:  "modelrun-netdata",
+				},
+			},
 			Tags:      []string{"netdata", "observability", "builtin"},
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -268,6 +304,8 @@ func DefaultBootstrapConfigs() []domain.BootstrapConfig {
 			DefaultArgs: map[string]string{
 				"image":         collect.DefaultNPUExporterImage(),
 				"containerName": "modelrun-npu-exporter",
+				"listenIP":      "0.0.0.0",
+				"port":          "8082",
 			},
 			Endpoint:  collect.DefaultNPUExporterEndpoint(),
 			Port:      8082,
@@ -282,11 +320,14 @@ func DefaultBootstrapConfigs() []domain.BootstrapConfig {
 			Category:         "observability",
 			BuiltIn:          true,
 			ActionTemplateID: "install_netdata",
-			DefaultArgs:      map[string]string{},
-			Endpoint:         collect.DefaultNetdataEndpoint(),
-			Port:             19999,
-			CreatedAt:        now,
-			UpdatedAt:        now,
+			DefaultArgs: map[string]string{
+				"image":         defaultNetdataImage,
+				"containerName": "modelrun-netdata",
+			},
+			Endpoint:  collect.DefaultNetdataEndpoint(),
+			Port:      19999,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
 		{
 			ID:               "bootstrap_modelscope_cli",
@@ -470,20 +511,46 @@ var actionTemplateAliases = map[string]string{
 }
 
 func refreshBuiltInActionTemplate(current *domain.ActionTemplate, defaults domain.ActionTemplate) bool {
-	_ = defaults
-	if !current.BuiltIn || current.ID != "install_npu_exporter" {
+	if !current.BuiltIn {
 		return false
 	}
 	changed := false
-	for i := range current.Fields {
-		if current.Fields[i].Key != "image" {
-			continue
+	switch current.ID {
+	case "install_npu_exporter":
+		if !strings.Contains(current.CommandTemplate, "-ip={{listenIP}}") {
+			current.CommandTemplate = defaults.CommandTemplate
+			current.Description = defaults.Description
+			current.Fields = defaults.Fields
+			changed = true
+			break
 		}
-		if current.Fields[i].DefaultValue == "" || current.Fields[i].DefaultValue == "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1" {
-			if current.Fields[i].DefaultValue != collect.DefaultNPUExporterImage() {
-				current.Fields[i].DefaultValue = collect.DefaultNPUExporterImage()
-				changed = true
+		for i := range current.Fields {
+			switch current.Fields[i].Key {
+			case "image":
+				if current.Fields[i].DefaultValue == "" || current.Fields[i].DefaultValue == "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1" {
+					if current.Fields[i].DefaultValue != collect.DefaultNPUExporterImage() {
+						current.Fields[i].DefaultValue = collect.DefaultNPUExporterImage()
+						changed = true
+					}
+				}
+			case "listenIP":
+				if strings.TrimSpace(current.Fields[i].DefaultValue) == "" {
+					current.Fields[i].DefaultValue = "0.0.0.0"
+					changed = true
+				}
+			case "port":
+				if strings.TrimSpace(current.Fields[i].DefaultValue) == "" {
+					current.Fields[i].DefaultValue = "8082"
+					changed = true
+				}
 			}
+		}
+	case "install_netdata":
+		if strings.Contains(current.CommandTemplate, "kickstart.sh") {
+			current.CommandTemplate = defaults.CommandTemplate
+			current.Description = defaults.Description
+			current.Fields = defaults.Fields
+			changed = true
 		}
 	}
 	if changed {
@@ -494,27 +561,52 @@ func refreshBuiltInActionTemplate(current *domain.ActionTemplate, defaults domai
 
 func refreshBuiltInBootstrapConfig(current *domain.BootstrapConfig, defaults domain.BootstrapConfig) bool {
 	if !current.BuiltIn || current.ID != "bootstrap_npu_exporter" {
-		return false
+		if !current.BuiltIn || current.ID != "bootstrap_netdata" {
+			return false
+		}
 	}
 	changed := false
-	if current.DefaultArgs == nil {
-		current.DefaultArgs = map[string]string{}
-	}
-	if value := strings.TrimSpace(current.DefaultArgs["image"]); value == "" || value == "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1" {
-		if current.DefaultArgs["image"] != collect.DefaultNPUExporterImage() {
-			current.DefaultArgs["image"] = collect.DefaultNPUExporterImage()
+	switch current.ID {
+	case "bootstrap_npu_exporter":
+		if current.DefaultArgs == nil {
+			current.DefaultArgs = map[string]string{}
+		}
+		if value := strings.TrimSpace(current.DefaultArgs["image"]); value == "" || value == "swr.cn-south-1.myhuaweicloud.com/ascendhub/npu-exporter:v2.0.1" {
+			if current.DefaultArgs["image"] != collect.DefaultNPUExporterImage() {
+				current.DefaultArgs["image"] = collect.DefaultNPUExporterImage()
+				changed = true
+			}
+		}
+		if strings.TrimSpace(current.Endpoint) == "" || current.Endpoint == "http://127.0.0.1:9101/metrics" {
+			if current.Endpoint != defaults.Endpoint {
+				current.Endpoint = defaults.Endpoint
+				changed = true
+			}
+		}
+		if current.Port == 0 || current.Port == 9101 {
+			if current.Port != defaults.Port {
+				current.Port = defaults.Port
+				changed = true
+			}
+		}
+		if strings.TrimSpace(current.DefaultArgs["listenIP"]) == "" {
+			current.DefaultArgs["listenIP"] = "0.0.0.0"
 			changed = true
 		}
-	}
-	if strings.TrimSpace(current.Endpoint) == "" || current.Endpoint == "http://127.0.0.1:9101/metrics" {
-		if current.Endpoint != defaults.Endpoint {
-			current.Endpoint = defaults.Endpoint
+		if strings.TrimSpace(current.DefaultArgs["port"]) == "" {
+			current.DefaultArgs["port"] = "8082"
 			changed = true
 		}
-	}
-	if current.Port == 0 || current.Port == 9101 {
-		if current.Port != defaults.Port {
-			current.Port = defaults.Port
+	case "bootstrap_netdata":
+		if current.DefaultArgs == nil {
+			current.DefaultArgs = map[string]string{}
+		}
+		if strings.TrimSpace(current.DefaultArgs["image"]) == "" {
+			current.DefaultArgs["image"] = defaultNetdataImage
+			changed = true
+		}
+		if strings.TrimSpace(current.DefaultArgs["containerName"]) == "" {
+			current.DefaultArgs["containerName"] = "modelrun-netdata"
 			changed = true
 		}
 	}
